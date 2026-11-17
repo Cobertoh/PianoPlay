@@ -72,7 +72,7 @@ export function pianoNotesToSong(notes, duration, opts = {}, title = 'Piano reco
  * noise leave behind – short, quiet blips with no steady pitch behind them, kick-drum thumps, and
  * notes outside a sensible range. `an` is a harmonic (drum-free) spectrogram from analyzeForArrangement.
  */
-export function filterSongNotes(notes, an) {
+export function filterSongNotes(notes, an, maxSim = 6) {
   const K = 85, LO = 24;
   const keep = notes.filter((n) => {
     const dur = n.t1 - n.t0;
@@ -85,6 +85,6 @@ export function filterSongNotes(notes, an) {
     if (n.m < 40 && dur < 0.2) return false;                        // kick drum thump
     return true;
   });
-  // never more than 6 notes at once – keep the loudest
-  return keep.filter((n) => { const sim = keep.filter((b) => b.t0 <= n.t0 + 0.01 && b.t1 > n.t0 + 0.01); if (sim.length <= 6) return true; sim.sort((a, b) => b.a - a.a); return sim.indexOf(n) < 6; });
+  // never more than maxSim notes at once – keep the loudest
+  return keep.filter((n) => { const sim = keep.filter((b) => b.t0 <= n.t0 + 0.01 && b.t1 > n.t0 + 0.01); if (sim.length <= maxSim) return true; sim.sort((a, b) => b.a - a.a); return sim.indexOf(n) < maxSim; });
 }

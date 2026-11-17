@@ -4,7 +4,12 @@ import { decodeToMono, analyzeAudio, framesToSong, DEFAULTS } from './transcribe
 import { analyzeForArrangement, arrangeSong, ARR_DEFAULTS } from './arrange.js';
 import { transcribeActivations, activationsToNotes, cleanNotes } from './basicpitch.js';
 import { pianoNotesToSong, filterSongNotes } from './pianoscribe.js';
-const PIANO_DETAIL = { fewer: { onsetThresh: 0.7, frameThresh: 0.35 }, normal: { onsetThresh: 0.6, frameThresh: 0.3 }, more: { onsetThresh: 0.45, frameThresh: 0.25 } };
+// Simple = only the clear, strong notes; Detailed = also quieter and shorter ones
+const DETAIL = {
+  simple: { dec: { onsetThresh: 0.72, frameThresh: 0.38, minNoteLen: 11 }, minAmp: 0.42, maxSim: 4 },
+  normal: { dec: { onsetThresh: 0.6, frameThresh: 0.3, minNoteLen: 6 }, minAmp: 0, maxSim: 6 },
+  detailed: { dec: { onsetThresh: 0.45, frameThresh: 0.25, minNoteLen: 5 }, minAmp: 0, maxSim: 8 },
+};
 const savedKind = (() => { try { return localStorage.getItem('pp-import-kind'); } catch { return null; } })();
 import { midiToSong, songToMidi } from './midi.js';
 import { midiToName, fmtTime } from './music.js';
@@ -34,9 +39,12 @@ function applyLevel(song) {
 function regenerate() {
   if (!iv.analysis) return;
   if (iv.analysis.kind === 'piano' || iv.analysis.kind === 'song') {
-    const a = iv.analysis; let notes = cleanNotes(activationsToNotes(a.act, { ...PIANO_DETAIL.normal, minNoteLen: 6 }));
-    if (a.kind === 'song') notes = filterSongNotes(notes, a.harm);
-    const song = pianoNotesToSong(notes, a.duration, {}, iv.name || 'Imported song');
+    const a = iv.analysis, D = DETAIL[iv.popts.detail] || DETAIL.normal;
+    let notes = cleanNotes(activationsToNotes(a.act, D.dec)).filter((n) => n.a >= D.minAmp);
+    if (a.kind === 'song') notes = filterSongNotes(notes, a.harm, D.maxSim);
+    else if (D.maxSim < 6) notes = notes.filter((n) => { const sim = notes.filter((b) => b.t0 <= n.t0 + 0.01 && b.t1 > n.t0 + 0.01); if (sim.length <= D.maxSim) return true; sim.sort((x, y) => y.a - x.a); return sim.indexOf(n) < D.maxSim; });
+    if (!notes.length) throw new Error('No clear notes were found – try Detailed.');
+    const song = pianoNotesToSong(notes, a.duration, { bpm: iv.popts.bpm }, iv.name || 'Imported song');
     if (a.kind === 'song') { song.composer = 'From a song'; song.desc = 'Every pitched part of the recording (vocals, guitar, keys, bass) played on piano; drums and noise are left out.'; }
     applyLevel(song); iv.song = song; iv.saved = false; return;
   }
@@ -82,7 +90,7 @@ export function renderImport(app, el) {
     const harm = song ? await analyzeForArrangement(samples, sr, { onProgress: (p) => prog.onProgress(p * 0.15), shouldCancel: prog.shouldCancel }) : null;
     const workers = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
     const act = await transcribeActivations(samples, { onProgress: (p) => prog.onProgress((song ? 0.15 : 0) + p * (song ? 0.85 : 1)), shouldCancel: prog.shouldCancel, workers, workerUrl: new URL('./bp-worker.js', import.meta.url) });
-    iv.analysis = { kind: iv.kind, act, harm, duration: samples.length / sr };
+    iv.analysis = { kind: iv.kind, act, harm, duration: samples.length / sr }; iv.popts = { detail: 'normal', bpm: null };
     regenerate();
   }
 
@@ -148,12 +156,24 @@ export function renderImport(app, el) {
         <div class="row"><button class="btn grow" id="listen">${ico('play')} Listen</button><button class="btn ghost grow" id="prac">${ico('music')} Learn it</button></div>
         <div class="row" style="margin-top:8px"><button class="btn sm ${iv.saved ? 'ghost' : ''} grow" id="save" ${iv.saved ? 'disabled' : ''}>${ico('check')} ${iv.saved ? 'Saved to library' : 'Save to library'}</button><button class="btn sm ghost" id="mid">${ico('download')} MIDI</button></div>
         <p class="small faint" style="margin:10px 2px 0">${iv.saved ? 'It’s in Songs → My imports.' : 'Not saved yet – listen first, and only save it if you like it.'}</p></div>
+      ${iv.analysis && !midi ? `<div class="section"><h2>Settings</h2></div><div class="card">
+        <label class="l">Notes</label>${sg('detail', [['simple', 'Simple'], ['normal', 'Normal'], ['detailed', 'Detailed']], iv.popts.detail)}
+        <p class="small faint" style="margin:6px 2px 0">Too many notes? Pick Simple. Missing some? Pick Detailed.</p>
+        <div class="gap"></div><label class="l">BPM <span id="bpmv">${s.tempo}</span></label>
+        <div class="row"><button class="btn sm ghost" data-bpm="0.5">½×</button><input type="range" id="bpm" min="30" max="240" value="${s.tempo}" class="grow"><button class="btn sm ghost" data-bpm="2">2×</button></div>
+        <p class="small faint" style="margin:6px 2px 0">Sets the beat the sheet music and Learn mode count in. The sound always follows the recording – change playback speed with the Speed slider in the player.</p></div>` : ''}
       ${!midi && iv.samples ? `<div class="gap"></div><button class="btn sm ghost block" id="mode">${iv.analysis?.kind === 'piano' ? 'Doesn’t sound right? Try it as “Any song”' : 'Is this solo piano? Try it as “Piano recording”'}</button>` : ''}
       <div class="section"><h2>Difficulty</h2></div>
       <div class="card">${sg('level', [['Auto', 'Auto'], ['Beginner', 'Easy'], ['Intermediate', 'Medium'], ['Advanced', 'Hard']], iv.level)}</div>`;
     $('#ttl', r).addEventListener('input', (e) => { iv.name = e.target.value; s.title = iv.name; });
     $('#mode', r)?.addEventListener('click', async () => { iv.kind = iv.analysis?.kind === 'piano' ? 'song' : 'piano'; try { localStorage.setItem('pp-import-kind', iv.kind); } catch {} iv.busy = true; iv.cancel = false; drawResult(); try { await analyse(); } catch (x) { if (x.message !== 'cancelled') toast(x.message); } iv.busy = false; draw(); });
-    r.onclick = (e) => { const b = e.target.closest('[data-s=level] button'); if (b) { iv.level = b.dataset.v; applyLevel(s); if (iv.saved) app.store.addCustom(s); drawResult(); } };
+    const redo = () => { const keepSaved = iv.saved, id = s.id; try { regenerate(); } catch (x) { toast(x.message); return; } if (keepSaved) { iv.song.id = id; iv.song.title = s.title; app.store.addCustom(iv.song); iv.saved = true; } drawResult(); };
+    let tm; $('#bpm', r)?.addEventListener('input', (e) => { $('#bpmv', r).textContent = e.target.value; iv.popts.bpm = +e.target.value; clearTimeout(tm); tm = setTimeout(redo, 300); });
+    $$('[data-bpm]', r).forEach((b) => b.addEventListener('click', () => { iv.popts.bpm = Math.max(30, Math.min(240, Math.round(s.tempo * +b.dataset.bpm))); redo(); }));
+    r.onclick = (e) => {
+      const d = e.target.closest('[data-s=detail] button'); if (d) { iv.popts.detail = d.dataset.v; redo(); return; }
+      const b = e.target.closest('[data-s=level] button'); if (b) { iv.level = b.dataset.v; applyLevel(s); if (iv.saved) app.store.addCustom(s); drawResult(); }
+    };
     const named = () => { s.title = (iv.name || 'My song').trim() || 'My song'; applyLevel(s); };
     $('#save', r).addEventListener('click', () => { named(); app.store.addCustom(s); iv.saved = true; toast('Saved to Songs → My imports'); drawResult(); });
     $('#listen', r).addEventListener('click', () => { named(); app.play(s, { mode: 'watch', onClose: () => app.route() }); });
