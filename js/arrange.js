@@ -18,51 +18,75 @@ import { midiToFreq, buildSong, barLength } from './music.js';
 import { estimateTempo, detectKey } from './transcribe.js';
 
 const LO = 24, HI = 108, K = HI - LO + 1;        // semitone bins C1..C8
-const MEL_LO = 50, MEL_HI = 88;                  // melody search range D3..E6
 const BAND_EDGES = Array.from({ length: 37 }, (_, i) => 60 * Math.pow(5000 / 60, i / 36));
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // ------------------------------------------------------------------ 1. analysis (heavy, once per file)
-export async function analyzeForArrangement(samples, sr, { onProgress, shouldCancel } = {}) {
+/**
+ * input: a mono Float32Array, or { left, right } for stereo. With stereo we also build two extra views:
+ *   centre = |mid| − |side|  (what is panned to the middle: lead vocal, hook samples, bass)
+ *   side   = |side|          (what is spread left/right: guitars, keys, pads)
+ */
+export async function analyzeForArrangement(input, sr, { onProgress, shouldCancel } = {}) {
+  const stereo = !(input instanceof Float32Array) && input.left && input.right;
+  const len = stereo ? input.left.length : input.length;
   const N = sr > 30000 ? 8192 : 4096, hop = Math.round(sr * 0.0232), hz = sr / N;
-  const fft = new FFT(N), win = hann(N), mag = new Float32Array(N / 2);
-  const nF = Math.max(1, Math.floor(samples.length / hop));
+  const fft = new FFT(N), win = hann(N), mag = new Float32Array(N / 2), magS = new Float32Array(N / 2);
+  const nF = Math.max(1, Math.floor(len / hop));
+  const mono = new Float32Array(len), side = stereo ? new Float32Array(len) : null;
+  for (let i = 0; i < len; i++) { if (stereo) { mono[i] = (input.left[i] + input.right[i]) / 2; side[i] = (input.left[i] - input.right[i]) / 2; } else mono[i] = input[i]; }
   // loudness normalisation
-  const pick = []; for (let i = 0; i < samples.length; i += Math.max(1, Math.floor(samples.length / 4000))) pick.push(Math.abs(samples[i]));
+  const pick = []; for (let i = 0; i < len; i += Math.max(1, Math.floor(len / 4000))) pick.push(Math.abs(mono[i]));
   pick.sort((a, b) => a - b); const p95 = pick[Math.floor(pick.length * 0.95)] || 1e-3;
   const gain = Math.min(40, Math.max(0.2, 0.12 / Math.max(p95, 1e-5)));
-  const x = new Float32Array(samples.length); for (let i = 0; i < x.length; i++) x[i] = samples[i] * gain;
+  for (let i = 0; i < len; i++) { mono[i] *= gain; if (side) side[i] *= gain; }
+  const x = mono;
+  let sideE = 0, midE = 0; if (side) for (let i = 0; i < len; i += 5) { sideE += side[i] * side[i]; midE += mono[i] * mono[i]; }
+  const wide = !!side && sideE / (midE + 1e-9) > 0.02;          // a real stereo mix (not mono saved as stereo)
   // low notes need finer frequency resolution: a second, longer FFT (every third frame) for bins below MIDI 52
   const N2 = N * 4, hz2 = sr / N2, fft2 = new FFT(N2), win2 = hann(N2), mag2 = new Float32Array(N2 / 2), KB = 52 - LO;
   const ranges2 = []; for (let k = 0; k < KB; k++) { const f = midiToFreq(LO + k); ranges2.push([Math.max(1, Math.round((f * 0.9715) / hz2)), Math.round((f * 1.0293) / hz2)]); }
   const ranges = []; for (let k = 0; k < K; k++) { const f = midiToFreq(LO + k); let a = Math.floor((f * 0.9715) / hz), b = Math.ceil((f * 1.0293) / hz); a = Math.max(1, Math.min(a, Math.round(f / hz))); b = Math.min(N / 2 - 1, Math.max(b, Math.round(f / hz))); ranges.push([a, b]); }
-  const spec = new Float32Array(nF * K), flux = new Float32Array(nF), lowFlux = new Float32Array(nF), rms = new Float32Array(nF);
+  const spec = new Float32Array(nF * K), specC = wide ? new Float32Array(nF * K) : null, specS = wide ? new Float32Array(nF * K) : null;
+  const flux = new Float32Array(nF), lowFlux = new Float32Array(nF), rms = new Float32Array(nF);
   let prev = new Float32Array(36);
   for (let i = 0; i < nF; i++) {
     const c = i * hop;
     amplitudeSpectrum(fft, win, x, c - N / 2, mag);
-    for (let k = 0; k < K; k++) { const [a, b] = ranges[k]; let m = 0; for (let j = a; j <= b; j++) if (mag[j] > m) m = mag[j]; spec[i * K + k] = m; }
+    if (wide) amplitudeSpectrum(fft, win, side, c - N / 2, magS);
+    for (let k = 0; k < K; k++) {
+      const [a, b] = ranges[k]; let m = 0, ms = 0, mc = 0;
+      for (let j = a; j <= b; j++) { if (mag[j] > m) m = mag[j]; if (wide) { if (magS[j] > ms) ms = magS[j]; const cc = mag[j] - magS[j]; if (cc > mc) mc = cc; } }
+      spec[i * K + k] = m; if (wide) { specS[i * K + k] = ms; specC[i * K + k] = mc; }
+    }
     if (i % 3 === 0) amplitudeSpectrum(fft2, win2, x, c - N2 / 2, mag2);   // bass moves slowly; refresh every 3rd frame
-    for (let k = 0; k < KB; k++) { const [a, b] = ranges2[k]; let m = 0; for (let j = a; j <= b; j++) if (mag2[j] > m) m = mag2[j]; spec[i * K + k] = m * 1.0; }
+    for (let k = 0; k < KB; k++) { const [a, b] = ranges2[k]; let m = 0; for (let j = a; j <= b; j++) if (mag2[j] > m) m = mag2[j]; spec[i * K + k] = m; }
     const band = new Float32Array(36);
     for (let bnd = 0; bnd < 36; bnd++) { let s = 0; for (let j = Math.max(1, Math.floor(BAND_EDGES[bnd] / hz)); j < Math.min(N / 2, Math.ceil(BAND_EDGES[bnd + 1] / hz)); j++) s += mag[j]; band[bnd] = Math.log1p(s * 40); }
     let f = 0, lf = 0; for (let bnd = 0; bnd < 36; bnd++) { const d = Math.max(0, band[bnd] - prev[bnd]); f += d; if (BAND_EDGES[bnd] < 180) lf += d; }
     flux[i] = f; lowFlux[i] = lf; prev = band;
-    let e = 0; for (let j = Math.max(0, c - hop); j < Math.min(x.length, c + hop); j++) e += x[j] * x[j]; rms[i] = Math.sqrt(e / (2 * hop));
-    if (i % 96 === 0) { onProgress?.(0.85 * i / nF); await tick(); if (shouldCancel?.()) throw new Error('cancelled'); }
+    let e = 0; for (let j = Math.max(0, c - hop); j < Math.min(len, c + hop); j++) e += x[j] * x[j]; rms[i] = Math.sqrt(e / (2 * hop));
+    if (i % 96 === 0) { onProgress?.(0.8 * i / nF); await tick(); if (shouldCancel?.()) throw new Error('cancelled'); }
   }
   // harmonic / percussive separation (median filters: along time = steady notes, along frequency = hits)
-  const harm = hpss(spec, nF, 9, 7);
-  onProgress?.(0.92); await tick();
-  // whitened log harmonic spectrum (per-frame floor removed)
+  const L = whiten(hpss(spec, nF, 9, 7), nF);
+  onProgress?.(0.87); await tick();
+  const Lc = wide ? whiten(hpss(specC, nF, 9, 7), nF) : null;
+  onProgress?.(0.94); await tick();
+  const Ls = wide ? whiten(hpss(specS, nF, 9, 7), nF) : null;
+  onProgress?.(1);
+  return { kind: 'arrange', L, Lc, Ls, wide, nF, hop, sr, hopSec: hop / sr, flux, lowFlux, rms, duration: len / sr };
+}
+
+/** log-compress and remove each frame's spectral floor */
+function whiten(harm, nF) {
   const L = new Float32Array(nF * K), tmp = new Float32Array(K);
   for (let i = 0; i < nF; i++) {
     for (let k = 0; k < K; k++) tmp[k] = Math.log1p(harm[i * K + k] * 300);
     const srt = Array.from(tmp).sort((a, b) => a - b), floor = srt[Math.floor(K * 0.5)];
     for (let k = 0; k < K; k++) L[i * K + k] = Math.max(0, tmp[k] - floor);
   }
-  onProgress?.(1);
-  return { kind: 'arrange', L, nF, hop, sr, hopSec: hop / sr, flux, lowFlux, rms, duration: samples.length / sr };
+  return L;
 }
 
 function hpss(spec, nF, wt, wf) {
@@ -80,15 +104,24 @@ function hpss(spec, nF, wt, wf) {
 
 // ------------------------------------------------------------------ 2. melody
 const HOFF = [0, 12, 19, 24, 28, 31], HW = [1, 0.75, 0.55, 0.4, 0.3, 0.22];
-function melodyPath(an) {
-  const { L, nF } = an, S = MEL_HI - MEL_LO + 1;
+function melodyPath(an, L = an.L, MEL_LO = 50, MEL_HI = 88) {
+  const { nF } = an, S = MEL_HI - MEL_LO + 1;
   const sal = new Float32Array(nF * S), fmax = new Float32Array(nF);
+  const row = new Float32Array(K);
   for (let i = 0; i < nF; i++) {
     let mx = 0;
+    for (let k = 0; k < K; k++) row[k] = L[i * K + k];
+    // explain away the bass: its 2nd/3rd/4th… harmonics sit right in the melody range
+    for (let pass = 0; pass < 2; pass++) {
+      let bb = -1, bv = 0;
+      for (let m = 28; m <= 50; m++) { const k = m - LO; if (row[k] < 0.35 || row[k] < row[k - 1] || row[k] < row[k + 1]) continue; let v = 0; for (let h = 0; h < 4; h++) v += HW[h] * row[k + HOFF[h]]; if (v > bv) { bv = v; bb = k; } }
+      if (bb < 0 || bv < 1) break;
+      row[bb] = 0; for (let h = 1; h < HOFF.length; h++) { const kk = bb + HOFF[h]; if (kk < K) row[kk] *= 0.2; }
+    }
     for (let s = 0; s < S; s++) {
       const k = MEL_LO + s - LO; let v = 0;
-      for (let h = 0; h < HOFF.length; h++) { const kk = k + HOFF[h]; if (kk < K) v += HW[h] * L[i * K + kk]; }
-      const f0 = L[i * K + k];
+      for (let h = 0; h < HOFF.length; h++) { const kk = k + HOFF[h]; if (kk < K) v += HW[h] * row[kk]; }
+      const f0 = row[k];
       if (f0 < 0.35) v *= 0.25;                                       // a real melody note has its fundamental
       // a note an octave below explaining this one as its 2nd harmonic is weaker evidence than this note itself
       sal[i * S + s] = v; if (v > mx) mx = v;
@@ -120,8 +153,8 @@ function melodyPath(an) {
   return { path, str };
 }
 
-function segmentMelody(an, { path, str }) {
-  const { L, hopSec } = an, nF = path.length;
+function segmentMelody(an, { path, str }, L = an.L) {
+  const { hopSec } = an, nF = path.length;
   // remove 1–2 frame glitches
   for (let i = 1; i < nF - 1; i++) {
     if (path[i] !== path[i - 1]) { let j = i; while (j < nF && path[j] === path[i] && j - i < 3) j++; if (j - i < 3 && j < nF && path[j] === path[i - 1]) for (let k = i; k < j; k++) path[k] = path[i - 1]; }
@@ -211,6 +244,8 @@ function framePitches(an, f) {
 }
 
 const CHORD_NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+const SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const SHARP_KEYS = new Set(['G', 'D', 'A', 'E', 'B', 'F#', 'Em', 'Bm', 'F#m', 'C#m', 'G#m', 'D#m']);
 function chordsFor(an, segs, keyPc, minorKey, perBar = 2) {
   const { L, nF, hopSec } = an;
   const scale = (minorKey ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11]).map((x) => (x + keyPc) % 12);
@@ -250,12 +285,57 @@ function chordsFor(an, segs, keyPc, minorKey, perBar = 2) {
 
 // ------------------------------------------------------------------ 4. arrangement (cheap, re-run on every setting change)
 export const _framePitches = framePitches;
-export const ARR_DEFAULTS = { style: 'flow', bpm: null, octave: 0, detail: 'normal', ts: [4, 4], harmony: false };
+export const ARR_DEFAULTS = { style: 'flow', bpm: null, octave: 0, detail: 'normal', ts: [4, 4], harmony: false, source: 'vocals' };
+
+/** Melody line from one view of the audio, cached per view. */
+function lineFrom(an, which) {
+  an._lines ||= {};
+  if (an._lines[which]) return an._lines[which];
+  const L = which === 'centre' ? an.Lc : which === 'side' ? an.Ls : an.L;
+  const [lo, hi] = which === 'centre' ? [52, 84] : [50, 88];
+  const mp = melodyPath(an, L, lo, hi);
+  const path = mp.path.slice();
+  return (an._lines[which] = { path, notes: segmentMelody(an, mp, L) });
+}
+
+/** raw melody notes (seconds) -> clean, quantised, legato line (beats) */
+function buildLine(raw, B, grid, bl, scale) {
+  const sMed = raw.length ? [...raw].map((n) => n.s).sort((a, b) => a - b)[Math.floor(raw.length / 2)] : 1;
+  let mel = raw.map((n) => ({ m: n.m, a: B(n.t0), b: B(n.t1), s: n.s })).filter((n) => n.a > -0.5);
+  // drop weak isolated blips (talking, noise)
+  mel = mel.filter((n, i) => {
+    const near = mel.some((x, j) => j !== i && Math.abs(x.a - n.a) < 1.5);
+    return n.s > sMed * 0.45 && (near || (n.b - n.a > 0.5 && n.s > sMed * 0.8));
+  });
+  // octave glitches: a note far from both neighbours is folded towards them
+  for (let i = 1; i < mel.length - 1; i++) { const p = mel[i - 1].m, q = mel[i + 1].m, c = mel[i].m; if (Math.abs(c - p) >= 10 && Math.abs(c - q) >= 10) mel[i].m += Math.round(((p + q) / 2 - c) / 12) * 12; }
+  // slides and scoops: short out-of-key notes are passing pitches of a glide -> snap to the scale
+  if (scale) for (const n of mel) if (!scale.includes(((n.m % 12) + 12) % 12) && n.b - n.a < 0.75) { const up = scale.includes((n.m + 1) % 12); n.m += up ? 1 : -1; }
+  // quantise; one note per grid slot (keep the stronger / longer)
+  const slots = new Map();
+  for (const n of mel) {
+    const t = Math.max(0, Math.round(n.a / grid) * grid), d = Math.max(grid, Math.round((n.b - n.a) / grid) * grid);
+    const k = t.toFixed(3), cur = slots.get(k), w = n.s * Math.min(2, d);
+    if (!cur || w > cur.w) slots.set(k, { t, d, m: n.m, w, s: n.s });
+  }
+  let rh = [...slots.values()].sort((a, b) => a.t - b.t);
+  // merge same pitch re-struck on the very next slot (sung notes wobble)
+  rh = rh.filter((n, i) => !(i > 0 && rh[i - 1].m === n.m && Math.abs(rh[i - 1].t + rh[i - 1].d - n.t) < 1e-6 && n.d <= grid * 2 && n.s < rh[i - 1].s * 1.25 && ((rh[i - 1].d += n.d), true)));
+  // legato like a singer: hold each note until the next one (up to a bar), never overlapping
+  for (let i = 0; i < rh.length; i++) { const nx = rh[i + 1]; const gap = nx ? nx.t - rh[i].t : rh[i].d; rh[i].d = Math.max(grid, Math.min(gap <= 1.01 ? gap : Math.max(rh[i].d, Math.min(gap, 2)), bl)); }
+  rh.sMed = sMed;
+  return rh;
+}
 
 export function arrangeSong(an, opts = {}, title = 'Imported song') {
   const o = { ...ARR_DEFAULTS, ...opts };
-  if (!an._mel) { const mp = melodyPath(an); an._path = mp.path.slice(); an._mel = segmentMelody(an, mp); an._tempo = tempoOf(an); }
-  let raw = an._mel;
+  if (!an._tempo) an._tempo = tempoOf(an);
+  // which view carries the tune
+  const leadView = !an.wide ? 'mix' : o.source === 'instruments' ? 'side' : 'centre';
+  const lead = lineFrom(an, leadView);
+  const fillLine = an.wide && o.source === 'vocals' ? lineFrom(an, 'side') : null;
+  an._path = lead.path;
+  let raw = lead.notes;
   const bpm = o.bpm || an._tempo.bpm;
   const beatsT = (an._beats && an._beatsBpm === bpm) ? an._beats : (an._beats = trackBeats(an, bpm), an._beatsBpm = bpm, an._beats);
   const spb = 60 / bpm;
@@ -271,49 +351,47 @@ export function arrangeSong(an, opts = {}, title = 'Imported song') {
   let bestOff = 0, bestS = -1;
   for (let off = 0; off < bl; off++) { let s = 0; for (let b = off; b < beatsT.length; b += bl) { const f = Math.round(beatsT[b] / an.hopSec); for (let d = -2; d <= 2; d++) s += an.lowFlux[f + d] || 0; } if (s > bestS) { bestS = s; bestOff = off; } }
   // first bar that contains music
-  const firstT = raw.length ? raw[0].t0 : 0;
+  const firstT = Math.min(raw.length ? raw[0].t0 : Infinity, fillLine?.notes.length ? fillLine.notes[0].t0 : Infinity, an.duration);
   let startBeat = bestOff; while (startBeat + bl <= tToBeat(firstT) - 0.25) startBeat += bl;
-  if (raw.length && tToBeat(firstT) - startBeat < -0.01) startBeat -= bl;
+  if (tToBeat(firstT) - startBeat < -0.01) startBeat -= bl;
+  an._startBeat = startBeat;
   const B = (t) => tToBeat(t) - startBeat;
+  // key from the whole harmonic spectrum (needed to clean up sung slides)
+  const keyNotes = []; for (let k = 0; k < K; k++) { let s = 0; for (let f = 0; f < an.nF; f += 2) s += an.L[f * K + k]; if (LO + k >= 36 && LO + k <= 84) keyNotes.push({ m: LO + k, d: s }); }
+  const key = detectKey(keyNotes), minorKey = /m$/.test(key);
+  const keyPc = Math.max(0, CHORD_NAMES.indexOf(key.replace(/m$/, '').replace('C#', 'Db').replace('G#', 'Ab').replace('D#', 'Eb').replace('A#', 'Bb')));
+  const scale = (minorKey ? [0, 2, 3, 5, 7, 8, 10, 11] : [0, 2, 4, 5, 7, 9, 11]).map((x) => (x + keyPc) % 12);
   // ---- melody: clean up to "what you would hum"
   const grid = o.detail === 'simple' ? 0.5 : o.detail === 'detailed' ? 0.25 : (bpm <= 92 ? 0.25 : 0.5);
-  const sMed = raw.length ? [...raw].map((n) => n.s).sort((a, b) => a - b)[Math.floor(raw.length / 2)] : 1;
-  let mel = raw.map((n) => ({ m: n.m, a: B(n.t0), b: B(n.t1), s: n.s })).filter((n) => n.a > -0.5);
-  // drop weak isolated blips (talking, noise)
-  mel = mel.filter((n, i) => {
-    const near = mel.some((x, j) => j !== i && Math.abs(x.a - n.a) < 1.5);
-    return n.s > sMed * 0.45 && (near || (n.b - n.a > 0.5 && n.s > sMed * 0.8));
-  });
-  // octave glitches: a note far from both neighbours is folded towards them
-  for (let i = 1; i < mel.length - 1; i++) { const p = mel[i - 1].m, q = mel[i + 1].m, c = mel[i].m; if (Math.abs(c - p) >= 10 && Math.abs(c - q) >= 10) mel[i].m += Math.round(((p + q) / 2 - c) / 12) * 12; }
-  // quantise; one note per grid slot (keep the stronger / longer)
-  const slots = new Map();
-  for (const n of mel) {
-    const t = Math.max(0, Math.round(n.a / grid) * grid), d = Math.max(grid, Math.round((n.b - n.a) / grid) * grid);
-    const k = t.toFixed(3), cur = slots.get(k), w = n.s * Math.min(2, d);
-    if (!cur || w > cur.w) slots.set(k, { t, d, m: n.m, w, s: n.s });
+  let rh = buildLine(raw, B, grid, bl, leadView === 'centre' ? scale : null);
+  const sMed = rh.sMed;
+  // vocals + instruments: the instrument riff answers in the gaps where the singer rests
+  if (fillLine) {
+    const fill = buildLine(fillLine.notes, B, grid, bl, null);
+    const gaps = []; let prevEnd = 0;
+    const lead0 = rh.map((n) => ({ t: n.t, e: n.t + Math.min(n.d, 2) }));
+    for (const n of lead0) { if (n.t - prevEnd >= 1.5) gaps.push([prevEnd + 0.25, n.t - 0.25]); prevEnd = Math.max(prevEnd, n.e); }
+    gaps.push([prevEnd + 0.25, Infinity]);
+    const med = rh.length ? [...rh].map((n) => n.m).sort((a, b) => a - b)[Math.floor(rh.length / 2)] : 72;
+    for (const f of fill) {
+      const g = gaps.find(([a, b]) => f.t >= a && f.t < b); if (!g) continue;
+      const m = f.m + Math.round((med - f.m) / 12) * 12;
+      rh.push({ ...f, m, d: Math.min(f.d, g[1] - f.t), fill: true });
+    }
+    rh.sort((a, b) => a.t - b.t);
   }
-  let rh = [...slots.values()].sort((a, b) => a.t - b.t);
-  // remove pitch "stutters": same pitch re-struck on the very next slot is merged (sung notes wobble)
-  rh = rh.filter((n, i) => !(i > 0 && rh[i - 1].m === n.m && Math.abs(rh[i - 1].t + rh[i - 1].d - n.t) < 1e-6 && n.d <= grid && n.s < rh[i - 1].s * 1.15 && ((rh[i - 1].d += n.d), true)));
-  // legato like a singer: hold each note until the next one (up to a bar), never overlapping
-  for (let i = 0; i < rh.length; i++) { const nx = rh[i + 1]; const gap = nx ? nx.t - rh[i].t : rh[i].d; rh[i].d = Math.max(grid, Math.min(gap <= 1.01 ? gap : Math.max(rh[i].d, Math.min(gap, 2)), bl)); }
   // comfortable right-hand register: centre the melody around A4–F5
   if (rh.length) {
     const med = [...rh].map((n) => n.m).sort((a, b) => a - b)[Math.floor(rh.length / 2)];
-    const shift = Math.round((72 - med) / 12) * 12 + 12 * o.octave;
+    const shift = Math.round((72 - med) / 12) * 12 + 12 * o.octave; an._shift = shift;
     rh.forEach((n) => { n.m += shift; while (n.m < 57) n.m += 12; while (n.m > 93) n.m -= 12; });
   }
-  // ---- key & chords (half-bar segments)
-  const keyNotes = []; for (let k = 0; k < K; k++) { let s = 0; for (let f = 0; f < an.nF; f += 2) s += an.L[f * K + k]; if (LO + k >= 36 && LO + k <= 84) keyNotes.push({ m: LO + k, d: s }); }
-  rh.forEach((n) => keyNotes.push({ m: n.m, d: n.d * 4 }));
-  const key = detectKey(keyNotes), minorKey = /m$/.test(key);
-  const keyPc = CHORD_NAMES.indexOf(key.replace(/m$/, '').replace('C#', 'Db').replace('G#', 'Ab').replace('D#', 'Eb').replace('A#', 'Bb'));
+  // ---- chords (half-bar segments)
   const half = bl / 2, lastBeat = Math.max(B(an.duration) - 0.01, rh.length ? rh[rh.length - 1].t + rh[rh.length - 1].d : 0);
   const nSeg = Math.max(1, Math.ceil(lastBeat / half));
   const beatTime = (b) => { const x = b + startBeat; const i = Math.floor(x); if (i < 0) return beatsT[0] + x * spb; if (i >= beatsT.length - 1) return beatsT[beatsT.length - 1] + (x - beatsT.length + 1) * spb; return beatsT[i] + (x - i) * (beatsT[i + 1] - beatsT[i]); };
   const segs = []; for (let i = 0; i < nSeg; i++) segs.push([beatTime(i * half), beatTime((i + 1) * half)]);
-  const chords = chordsFor(an, segs, keyPc < 0 ? 0 : keyPc, minorKey);
+  const chords = chordsFor(an, segs, keyPc, minorKey);
   // melody that is silent for a whole segment with no harmony either -> treat as silence
   // ---- left hand
   const lh = [], harm = [], pedal = [];
@@ -343,7 +421,7 @@ export function arrangeSong(an, opts = {}, title = 'Imported song') {
   }
   // final chord: let the piece end on a held tonic-ish chord if it stops abruptly
   const notes = [
-    ...rh.map((n) => ({ t: +n.t.toFixed(4), d: +n.d.toFixed(4), m: n.m, h: 'R', vel: Math.min(0.92, 0.62 + 0.12 * Math.min(1, n.s / (sMed * 1.6)) + ((n.t % bl) < 1e-6 ? 0.05 : 0)) })),
+    ...rh.map((n) => ({ t: +n.t.toFixed(4), d: +n.d.toFixed(4), m: n.m, h: 'R', vel: (n.fill ? -0.08 : 0) + Math.min(0.92, 0.62 + 0.12 * Math.min(1, n.s / (sMed * 1.6)) + ((n.t % bl) < 1e-6 ? 0.05 : 0)) })),
     ...harm.map((n) => ({ ...n, h: 'R', vel: n.v })),
     ...lh.map((n) => ({ t: n.t, d: n.d, m: n.m, h: 'L', vel: n.v })),
   ];
@@ -355,8 +433,9 @@ export function arrangeSong(an, opts = {}, title = 'Imported song') {
   });
   // progression summary for the "learn it yourself" panel
   const prog = []; let last = null;
+  const NAMES = SHARP_KEYS.has(key) ? SHARP_NAMES : CHORD_NAMES; chords.forEach((c) => { c.name = NAMES[c.r] + (c.q ? 'm' : ''); });
   for (let s = 0; s < nSeg; s++) { const c = chords[s]; if (c.silent) continue; if (c.name !== last) prog.push({ bar: Math.floor((s * half) / bl) + 1, name: c.name }); last = c.name; }
   song.chordsInfo = prog;
-  song.analysisInfo = { bpm: Math.round(an._tempo.bpm), confidence: an._tempo.confidence, melodyNotes: rh.length, key };
+  song.analysisInfo = { bpm: Math.round(an._tempo.bpm), confidence: an._tempo.confidence, melodyNotes: rh.length, key, stereo: an.wide, source: leadView };
   return song;
 }

@@ -14,22 +14,25 @@ export const ONSET_BIAS = 0.045;     // seconds; the first frame that "sees" a n
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
-/** Decode an audio file/Blob to mono Float32 at 22.05 kHz (browser only). */
+/** Decode an audio file/Blob to 22.05 kHz: mono mix plus left/right when the file is stereo (browser only). */
 export async function decodeToMono(arrayBuffer, targetSr = 22050) {
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   const probe = new Ctx(1, targetSr, targetSr);
   const buf = await new Promise((res, rej) => { const p = probe.decodeAudioData(arrayBuffer, res, rej); if (p && p.then) p.then(res, rej); });
   const len = Math.min(buf.length, Math.floor(buf.sampleRate * 60 * 6));            // cap at 6 minutes
-  const mono = new Float32Array(len);
-  for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < len; i++) mono[i] += d[i] / buf.numberOfChannels; }
-  let out = mono, sr = buf.sampleRate;
-  if (sr !== targetSr) {                                                            // simple resample via OfflineAudioContext
-    const off = new Ctx(1, Math.ceil((len * targetSr) / sr), targetSr);
-    const b2 = off.createBuffer(1, len, sr); b2.copyToChannel(mono, 0);
+  const nCh = Math.min(2, buf.numberOfChannels);
+  let chans = [];
+  for (let c = 0; c < nCh; c++) chans.push(buf.getChannelData(c).subarray(0, len));
+  let sr = buf.sampleRate;
+  if (sr !== targetSr) {                                                            // resample via OfflineAudioContext
+    const off = new Ctx(nCh, Math.ceil((len * targetSr) / sr), targetSr);
+    const b2 = off.createBuffer(nCh, len, sr); chans.forEach((d, c) => b2.copyToChannel(d, c));
     const src = off.createBufferSource(); src.buffer = b2; src.connect(off.destination); src.start();
-    out = (await off.startRendering()).getChannelData(0); sr = targetSr;
+    const r = await off.startRendering(); chans = []; for (let c = 0; c < nCh; c++) chans.push(r.getChannelData(c)); sr = targetSr;
   }
-  return { samples: out, sr, duration: len / buf.sampleRate, truncated: buf.length > len };
+  const n = chans[0].length, mono = new Float32Array(n);
+  for (const d of chans) for (let i = 0; i < n; i++) mono[i] += d[i] / chans.length;
+  return { samples: mono, left: nCh === 2 ? chans[0] : null, right: nCh === 2 ? chans[1] : null, sr, duration: len / buf.sampleRate, truncated: buf.length > len };
 }
 
 export async function analyzeAudio(samples, sr, { onProgress, shouldCancel } = {}) {

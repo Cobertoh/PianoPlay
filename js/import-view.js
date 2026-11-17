@@ -50,9 +50,9 @@ export function renderImport(app, el) {
     busyView('Decoding audio…', 0.02); drawResult();
     $('#cancel', el)?.addEventListener('click', () => { iv.cancel = true; });
     try {
-      const { samples, sr, duration, truncated } = await decodeToMono(buf);
+      const { samples, left, right, sr, duration, truncated } = await decodeToMono(buf);
       if (duration < 1) throw new Error('That audio is too short.');
-      iv.samples = { samples, sr };
+      iv.samples = { samples, left, right, sr };
       await analyse();
       if (!iv.song?.notes.length) { toast('No clear melody was found in that audio.'); }
       if (truncated) toast('Only the first 6 minutes were analysed.');
@@ -63,11 +63,11 @@ export function renderImport(app, el) {
   }
 
   async function analyse() {
-    const { samples, sr } = iv.samples;
+    const { samples, left, right, sr } = iv.samples;
     const prog = { onProgress: (p) => { const b = $('#pbar', el); if (b) b.style.width = Math.round(p * 100) + '%'; }, shouldCancel: () => iv.cancel };
     busyView(iv.mode === 'arrange' ? 'Finding the melody, beat and chords…' : 'Listening for every note…', 0.05);
     $('#cancel', el)?.addEventListener('click', () => { iv.cancel = true; });
-    if (iv.mode === 'arrange') { iv.analysis = await analyzeForArrangement(samples, sr, prog); iv.aopts = { ...ARR_DEFAULTS }; }
+    if (iv.mode === 'arrange') { iv.analysis = await analyzeForArrangement(left && right ? { left, right } : samples, sr, prog); iv.aopts = { ...ARR_DEFAULTS }; }
     else { iv.analysis = await analyzeAudio(samples, sr, prog); iv.opts = { ...DEFAULTS }; }
     regenerate();
   }
@@ -137,7 +137,9 @@ export function renderImport(app, el) {
         <div class="row"><button class="btn grow" id="listen">${ico('play')} Listen</button><button class="btn ghost grow" id="prac">${ico('music')} Learn it</button></div>
         <div class="row" style="margin-top:8px"><button class="btn sm ghost grow" id="save">${ico('check')} Save</button><button class="btn sm ghost grow" id="mid">${ico('download')} MIDI</button></div></div>
       ${arr ? `<div class="section"><h2>Make it sound right</h2></div><div class="card">
-        <label class="l">Left hand</label>${sg('style', [['simple', 'Simple'], ['flow', 'Flowing'], ['full', 'Full']], ao.style)}
+        <label class="l">Melody from</label>${sg('source', [['vocals', 'Vocals + instruments'], ['instruments', 'Instruments only']], ao.source)}
+        <p class="small faint" style="margin:6px 2px 0">${iv.analysis.wide ? (ao.source === 'vocals' ? 'Plays the sung melody (or the main hook), and the instrument riff fills the gaps when the singer rests.' : 'Ignores the singer and follows the guitar / keys instead.') : 'This audio is mono, so the singer can’t be separated from the instruments – both options follow the loudest melody.'}</p>
+        <div class="gap"></div><label class="l">Left hand</label>${sg('style', [['simple', 'Simple'], ['flow', 'Flowing'], ['full', 'Full']], ao.style)}
         <div class="gap"></div><label class="l">Melody</label>${sg('detail', [['simple', 'Fewer notes'], ['normal', 'Normal'], ['detailed', 'More detail']], ao.detail)}
         <div class="gap"></div><label class="l">Speed felt wrong? <span class="faint">(${s.tempo} BPM)</span></label>
         <div class="row"><button class="btn sm ghost grow" data-bpm="0.5">Half speed</button><button class="btn sm ghost grow" data-bpm="2">Double speed</button></div>
@@ -171,7 +173,7 @@ export function renderImport(app, el) {
     r.onclick = (e) => {
       const sg1 = e.target.closest('[data-s] button'); if (!sg1) return;
       const k = sg1.parentElement.dataset.s, v = sg1.dataset.v;
-      if (k === 'style' || k === 'detail') { iv.aopts[k] = v; redo(); }
+      if (k === 'style' || k === 'detail' || k === 'source') { iv.aopts[k] = v; if (k === 'source') iv.aopts.octave = 0; redo(); }
       else if (k === 'level') { iv.level = v; applyLevel(s); drawResult(); }
     };
     const finalize = () => { s.title = (iv.name || 'My song').trim() || 'My song'; applyLevel(s); app.store.addCustom(s); };

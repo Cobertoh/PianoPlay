@@ -57,5 +57,7 @@ export async function run(t) {
   t(`melody recall ${recall.toFixed(2)}, precision ${precision.toFixed(2)} (${rh.length} RH notes for ${mel.length} true)`, () => assert.ok(recall >= 0.75 && precision >= 0.7));
   t(`tempo ${song.tempo} vs ${bpm}`, () => assert.ok(Math.abs(song.tempo - bpm) <= 3));
   t(`chords ${prog.join(' ')}`, () => assert.ok(okChords));
+  const mono2 = arrangeSong(await analyzeForArrangement({ left: sig, right: sig }, sr), {}, 'beat');
+  t('mono file saved as stereo falls back to the mix', () => assert.ok(mono2.notes.filter((n) => n.h === 'R').length >= 28 && mono2.analysisInfo.stereo === false));
   t(`key ${song.key}`, () => assert.ok(['Am', 'C'].includes(song.key)));
 }
