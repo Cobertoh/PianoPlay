@@ -88,3 +88,20 @@ export function filterSongNotes(notes, an, maxSim = 6) {
   // never more than maxSim notes at once – keep the loudest
   return keep.filter((n) => { const sim = keep.filter((b) => b.t0 <= n.t0 + 0.01 && b.t1 > n.t0 + 0.01); if (sim.length <= maxSim) return true; sim.sort((a, b) => b.a - a.a); return sim.indexOf(n) < maxSim; });
 }
+
+/**
+ * Vocals / instruments split for stereo songs. Lead vocals are mixed in the centre; guitars, keys and
+ * pads are spread left/right. For each note we compare its energy in the centre view (|mid| − |side|)
+ * with the side view. Bass (below G3) always counts as an instrument.
+ * parts: 'both' | 'vocals' | 'instruments'. Mono audio: returns notes unchanged.
+ */
+export function splitParts(notes, an, parts) {
+  if (parts === 'both' || !an?.wide || !an.Hc) return notes;
+  const K = 85, LO = 24;
+  return notes.filter((n) => {
+    let c = 0, s = 0; const k = n.m - LO;
+    for (let f = Math.floor(n.t0 / an.hopSec); f < Math.min(an.nF, Math.ceil(n.t1 / an.hopSec)); f++) for (const kk of [k, k + 12]) { if (kk < 0 || kk >= K) continue; c += an.Hc[f * K + kk]; s += an.Hs[f * K + kk]; }
+    const vocal = n.m >= 55 && c > s * 1.6;
+    return parts === 'vocals' ? vocal : !vocal;
+  });
+}

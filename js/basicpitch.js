@@ -100,10 +100,15 @@ export function activationsToNotes({ frames, onsets, nFrames }, { onsetThresh = 
     notes.push({ s, e: i, m: p + MIDI_OFFSET, a: amp / (i - s), mel: false });
   }
   if (melodia) {
-    for (let guard = 0; guard < 20000; guard++) {
-      let best = -1, bv = frameThresh;
-      for (let i = 0; i < energy.length; i++) if (energy[i] > bv) { bv = energy[i]; best = i; }
-      if (best < 0) break;
+    // repeated "loudest remaining frame" search: energy only ever gets zeroed, so walking a list sorted
+    // once by value (skipping cleared cells) gives exactly the same order as re-scanning – but fast
+    const cand = [];
+    for (let i = 0; i < energy.length; i++) if (energy[i] > frameThresh) cand.push(i);
+    const orig = Float32Array.from(cand, (i) => energy[i]);
+    const ord = Uint32Array.from(cand.keys()).sort((x, y) => orig[y] - orig[x] || cand[x] - cand[y]);
+    for (let q = 0; q < ord.length; q++) {
+      const best = cand[ord[q]];
+      if (energy[best] !== orig[ord[q]] || energy[best] <= frameThresh) continue;
       const iMid = Math.floor(best / P), p = best % P; energy[best] = 0;
       const clear = (i) => { energy[i * P + p] = 0; if (p < P - 1) energy[i * P + p + 1] = 0; if (p > 0) energy[i * P + p - 1] = 0; };
       let i = iMid + 1, k = 0;

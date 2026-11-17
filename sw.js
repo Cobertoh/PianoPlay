@@ -1,5 +1,5 @@
 // PianoPlay service worker: precache the app shell so it works offline; update in the background.
-const VERSION = 'pianoplay-v8';
+const VERSION = 'pianoplay-v9';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/ui.js', 'js/store.js', 'js/input.js', 'js/player.js', 'js/practice.js', 'js/practice-view.js', 'js/import-view.js',
   'js/music.js', 'js/songs.js', 'js/audio.js', 'js/stage.js', 'js/sheet.js', 'js/glyphs.js', 'js/session.js', 'js/pitch.js', 'js/fft.js', 'js/midi.js', 'js/transcribe.js', 'js/arrange.js', 'js/perform.js', 'js/tfgraph.js', 'js/basicpitch.js', 'js/bp-worker.js', 'js/pianoscribe.js', 'models/basic-pitch/model.json', 'models/basic-pitch/group1-shard1of1.bin',
@@ -11,7 +11,8 @@ self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) =
 self.addEventListener('fetch', (e) => {
   const req = e.request; if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== location.origin) return;                       // YouTube etc. go straight to the network
+  if (url.origin !== location.origin) return;                       // other sites go straight to the network
+  if (url.pathname.startsWith('/api/')) return;                     // song search / downloads: never cached
   // stale-while-revalidate for same-origin files; library/ JSON is network-first so new songs show up
   const netFirst = url.pathname.includes('/library/');
   e.respondWith(caches.open(VERSION).then(async (c) => {

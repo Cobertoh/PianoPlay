@@ -1,5 +1,7 @@
 {
   "name": "pianoplay",
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./" }
+  // worker.js answers /api/* (song search & audio for the Find tab); everything else is the static app
+  "main": "worker.js",
+  "assets": { "directory": "./", "binding": "ASSETS", "run_worker_first": ["/api/*"] }
 }

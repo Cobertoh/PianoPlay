@@ -48,3 +48,7 @@ Music-notation glyph outlines are from GNU FreeFont's FreeSerif (GPL with font e
 - Sheet music / MIDI: [Mutopia Project](https://www.mutopiaproject.org) (public domain or Creative Commons; licence per piece in `library/index.json`). Rebuild with `node tools/build-library.mjs <path to falling-notes clone>`.
 - Piano samples: Salamander Grand Piano by Alexander Holm, CC BY 3.0.
 - Note transcription model: [Basic Pitch](https://github.com/spotify/basic-pitch-ts) by Spotify, Apache 2.0 (`models/basic-pitch/`), run by the small built-in executor in `js/tfgraph.js`.
+
+
+## Find tab (song search)
+`worker.js` is a small Cloudflare Worker deployed together with the app by `npx wrangler deploy` (see `wrangler.jsonc`). It answers `/api/*`: song search (Apple iTunes Search API previews + Internet Archive full-length free/public-domain audio) and an audio proxy restricted to those two sources, because browsers block web pages from downloading audio from other sites. It never fetches from YouTube, Spotify or similar services.

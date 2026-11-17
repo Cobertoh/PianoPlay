@@ -222,3 +222,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
   .view{padding-bottom:calc(var(--tab) + var(--sab) + 18px)}
   .hint.count{font-size:48px}
 }
+/* import: settings feedback */
+#result.working .card button{pointer-events:none}
+.card{position:relative}
+.applying{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;background:rgba(10,10,25,.62);border-radius:inherit;backdrop-filter:blur(2px);animation:fade .15s}

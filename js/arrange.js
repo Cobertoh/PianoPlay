@@ -71,11 +71,11 @@ export async function analyzeForArrangement(input, sr, { onProgress, shouldCance
   // harmonic / percussive separation (median filters: along time = steady notes, along frequency = hits)
   const L = whiten(hpss(spec, nF, 9, 7), nF);
   onProgress?.(0.87); await tick();
-  const Lc = wide ? whiten(hpss(specC, nF, 9, 7), nF) : null;
+  const Hc = wide ? hpss(specC, nF, 9, 7) : null, Lc = wide ? whiten(Hc, nF) : null;
   onProgress?.(0.94); await tick();
-  const Ls = wide ? whiten(hpss(specS, nF, 9, 7), nF) : null;
+  const Hs = wide ? hpss(specS, nF, 9, 7) : null, Ls = wide ? whiten(Hs, nF) : null;
   onProgress?.(1);
-  return { kind: 'arrange', L, Lc, Ls, wide, nF, hop, sr, hopSec: hop / sr, flux, lowFlux, rms, duration: len / sr };
+  return { kind: 'arrange', L, Lc, Ls, Hc, Hs, wide, nF, hop, sr, hopSec: hop / sr, flux, lowFlux, rms, duration: len / sr };
 }
 
 /** log-compress and remove each frame's spectral floor */

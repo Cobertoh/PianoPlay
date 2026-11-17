@@ -8,3 +8,4 @@ tools
 package.json
 README.md
 library/README.md
+worker.js
