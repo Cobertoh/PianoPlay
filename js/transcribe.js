@@ -122,7 +122,7 @@ export function detectKey(notes) {
 }
 
 // ---------------------------------------------------------------- frames -> notes -> song
-export const DEFAULTS = { sens: 1, minDur: 0.1, grid: 0.25, ts: [4, 4], maxPerHand: 4, faithful: true, split: null, bpm: null, simplifyShort: true };
+export const DEFAULTS = { sens: 1, minDur: 0.1, grid: 0.25, ts: [4, 4], maxPerHand: 4, faithful: false, split: null, bpm: null, simplifyShort: true };
 
 export function framesToSong(analysis, options = {}, title = 'Imported song') {
   const o = { ...DEFAULTS, ...options };

@@ -1,8 +1,8 @@
 // PianoPlay service worker: precache the app shell so it works offline; update in the background.
-const VERSION = 'pianoplay-v3';
+const VERSION = 'pianoplay-v4';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'js/app.js', 'js/ui.js', 'js/store.js', 'js/input.js', 'js/player.js', 'js/practice.js', 'js/practice-view.js', 'js/import-view.js',
-  'js/music.js', 'js/songs.js', 'js/audio.js', 'js/stage.js', 'js/sheet.js', 'js/glyphs.js', 'js/session.js', 'js/pitch.js', 'js/fft.js', 'js/midi.js', 'js/transcribe.js',
+  'js/music.js', 'js/songs.js', 'js/audio.js', 'js/stage.js', 'js/sheet.js', 'js/glyphs.js', 'js/session.js', 'js/pitch.js', 'js/fft.js', 'js/midi.js', 'js/transcribe.js', 'js/arrange.js', 'js/perform.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   'samples/piano/A0.mp3', 'samples/piano/C8.mp3',
   ...[1, 2, 3, 4, 5, 6, 7].flatMap((o) => ['C', 'Ds', 'Fs', 'A'].map((n) => `samples/piano/${n}${o}.mp3`))];

@@ -3,7 +3,8 @@
 //   watch : the song plays itself (demo)
 //   learn : "wait mode" – notes fall and stop at the keyboard until you play them (Simply-Piano style)
 //   play  : "flow mode" – everything keeps moving; hits and misses are scored by timing
-import { stepsOf, barLength, tempoClock } from './music.js';
+import { stepsOf, barLength } from './music.js';
+import { preparePerformance, performanceClock } from './perform.js';
 
 export const MODES = ['watch', 'learn', 'play'];
 
@@ -23,14 +24,14 @@ export class Session {
     this.beat = 0; this.running = false;
     this.notes = song.notes;
     this.sorted = [...this.notes].sort((a, b) => a.t - b.t);
-    this.sortedExact = song.audioNotes ? [...song.audioNotes].sort((a, b) => a.t - b.t) : null;
     this.bl = barLength(song.ts);
-    this.clock = tempoClock(song);
+    this.clock = performanceClock(song);
+    this.perf = preparePerformance(song);
     this._tick = this._tick.bind(this);
     this.reset();
   }
 
-  get ps() { return this.mode === 'watch' && this.sortedExact && this.exactTiming !== false ? this.sortedExact : this.sorted; }
+  get ps() { return this.sorted; }
   get bps() { return (this.clock.bpm(Math.max(this.beat, 0)) / 60) * this.speed; }
   get practiced() { return this.hand === 'both' ? this.notes : this.notes.filter((n) => (this.hand === 'R' ? n.h !== 'L' : n.h === 'L')); }
   isPracticed(n) { return this.hand === 'both' || (this.hand === 'R' ? n.h !== 'L' : n.h === 'L'); }
@@ -146,8 +147,9 @@ export class Session {
       if (n.t < this.beat - 0.05 && n.t < next - 0.05) continue;
       const mine = this.isPracticed(n);
       if (this.mode === 'watch' || (!mine && this.accompaniment)) {
-        const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, n.t) / this.speed);
-        this.audio.play(n.m, Math.max(0.12, this.clock.sec(n.t, n.t + n.d) / this.speed * 0.97), n.vel ?? (n.h === 'L' ? 0.62 : 0.78), when);
+        const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, n.t) / this.speed + (Math.random() - 0.5) * 0.008);
+        const endB = this.perf.end.get(n.id) ?? n.t + n.d;
+        this.audio.play(n.m, Math.max(0.12, this.clock.sec(n.t, endB) / this.speed - 0.01), this.perf.vel.get(n.id) ?? 0.7, when);
       }
     }
   }

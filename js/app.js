@@ -24,6 +24,7 @@ app.resolveSong = async (s) => {
   if (!s.stub) return s;
   const buf = await (await fetch(s.file)).arrayBuffer();
   const song = midiToSong(buf, s.title);
+  if (s.tempoScale) { song.tempo = Math.round(song.tempo * s.tempoScale); if (song.tempoMap) song.tempoMap = song.tempoMap.map((x) => ({ ...x, bpm: x.bpm * s.tempoScale })); }
   Object.assign(song, { id: s.id, title: s.title, composer: s.composer || 'Library', era: s.era || '', level: s.level || song.level, cat: s.cat || 'classical', desc: s.desc || '', exact: true, stub: false });
   const i = app.dropIns.findIndex((d) => d.id === s.id); if (i >= 0) app.dropIns[i] = song;
   return song;

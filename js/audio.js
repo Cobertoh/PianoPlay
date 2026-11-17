@@ -52,7 +52,7 @@ export class AudioEngine {
     const voice = {
       m, released: false,
       release: (at = ctx.currentTime, rel = 0.22) => {
-        if (voice.released) return; voice.released = true;
+        if (voice.relAt != null && Math.max(at, ctx.currentTime) >= voice.relAt) return; voice.released = true; voice.relAt = Math.max(at, ctx.currentTime);
         const r = Math.max(at, ctx.currentTime);
         g.gain.cancelScheduledValues(r); g.gain.setValueAtTime(g.gain.value, r); g.gain.setTargetAtTime(0, r, Math.max(0.03, rel / 3.5));
         try { src.stop(r + rel * 2 + 0.15); } catch {}
@@ -107,6 +107,7 @@ export class AudioEngine {
   noteOn(m, vel = 0.75, when = this.ctx.currentTime) {
     if (this.muted) return { release() {} };
     const ctx = this.ctx, t = Math.max(when, ctx.currentTime);
+    for (const v of this.voices) if (v.m === m && (v.relAt == null || v.relAt > t)) v.release(t, 0.09);   // re-striking a string damps the old sound
     if (this.sampleStatus === 'ready') return this._sampleNote(m, vel, t);
     const f = 440 * Math.pow(2, (m - 69) / 12);
     const wave = m < 50 ? this.waves.low : m < 78 ? this.waves.mid : this.waves.high;
@@ -143,7 +144,7 @@ export class AudioEngine {
     const voice = {
       m, released: false,
       release: (at = ctx.currentTime, rel = 0.18) => {
-        if (voice.released) return; voice.released = true;
+        if (voice.relAt != null && Math.max(at, ctx.currentTime) >= voice.relAt) return; voice.released = true; voice.relAt = Math.max(at, ctx.currentTime);
         const r = Math.max(at, ctx.currentTime);
         out.gain.cancelScheduledValues(r);
         out.gain.setTargetAtTime(0, r, rel / 3);

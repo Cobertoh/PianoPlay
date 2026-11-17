@@ -19,6 +19,8 @@ const T = {
   2033: 'Prelude in C# minor, Op. 3 No. 2', 1958: 'Prelude in F# minor, Op. 23 No. 1', 263: 'The Entertainer', 23: 'Maple Leaf Rag', 203: "L'Arabesque", 224: 'Consolation', 519: 'The Blue Danube (main theme)', 781: 'Wedding Day at Troldhaugen',
   794: 'Waltz in A♭, Op. 39 No. 15', 2164: 'Waltz Op. 39 No. 10', 1037: 'Lullaby (Wiegenlied)', 37: 'Gymnopédie No. 1', 38: 'Gymnopédie No. 2', 39: 'Gymnopédie No. 3', 2035: 'Gnossienne No. 1',
 };
+// performance tempo corrections where the source file's tempo marking is off (factor applied to every tempo)
+const SCALE = { 108: 2, 1590: 0.8, 472: 0.8, 23: 0.8, 2035: 0.85, 471: 0.88, 468: 0.88, 37: 0.75, 38: 0.75, 39: 0.75, 2033: 0.9, 743: 0.92 };
 const ERA = { Chopin: 'Romantic', Mozart: 'Classical', Beethoven: 'Classical', Debussy: 'Impressionist', Satie: 'Impressionist', Bach: 'Baroque', Schubert: 'Romantic', Liszt: 'Romantic', Tchaikovsky: 'Romantic', Rachmaninoff: 'Romantic', Joplin: 'Ragtime', Burgmüller: 'Romantic', Strauss: 'Romantic', Grieg: 'Romantic', Brahms: 'Romantic' };
 const clean = (c) => c.replace(/\s*\(.*$/, '').replace(/^(?:[A-Z]\.\s*)+/, '').replace(/^F\.\s*/, '').trim();
 fs.mkdirSync('library/midi', { recursive: true });
@@ -29,11 +31,11 @@ for (const p of picks) {
   if (!fs.existsSync(from)) { console.warn('missing', from); continue; }
   const buf = fs.readFileSync(from);
   let song; try { song = midiToSong(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), p.title); } catch (e) { console.warn('skip', p.cid, e.message); continue; }
-  const sec = tempoClock(song).sec(0, song.length);
+  const sec = tempoClock(song).sec(0, song.length) / (SCALE[p.cid] || 1);
   const last = clean(p.composer).split(' ').pop(), composer = clean(p.composer);
   const id = 'lib-' + p.cid;
   fs.copyFileSync(from, `library/midi/${id}.mid`);
-  out.push({ id, title: T[p.cid] || p.title, composer, era: ERA[last] || ERA[composer.split(' ').pop()] || '', level: p.level || 'Intermediate', cat: 'classical', file: `library/midi/${id}.mid`, bars: song.bars, sec: Math.round(sec), notes: song.notes.length, license: p.license, mutopia: p.mutopia });
+  out.push({ id, title: T[p.cid] || p.title, composer, era: ERA[last] || ERA[composer.split(' ').pop()] || '', level: p.level || 'Intermediate', cat: 'classical', file: `library/midi/${id}.mid`, bars: song.bars, sec: Math.round(sec), ...(SCALE[p.cid] ? { tempoScale: SCALE[p.cid] } : {}), notes: song.notes.length, license: p.license, mutopia: p.mutopia });
   report.push(`${p.cid}\t${p.level}\test:${song.est.label}\t${Math.round(sec)}s\t${song.notes.length}n\t${T[p.cid] || p.title}`);
 }
 out.sort((a, b) => a.composer.localeCompare(b.composer) || a.title.localeCompare(b.title));

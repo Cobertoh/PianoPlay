@@ -38,7 +38,7 @@ export function parseMidiFile(buffer) {
   const nTracks = u16(d, 10), ppq = u16(d, 12);
   if (ppq & 0x8000) throw new Error('SMPTE-timed MIDI files are not supported');
   let pos = 8 + u32(d, 4);
-  const out = { ppq, tracks: [], tempos: [], ts: [4, 4], key: 'C' };
+  const out = { ppq, tracks: [], tempos: [], pedal: [], ts: [4, 4], key: 'C' };
   for (let t = 0; t < nTracks && pos < d.length; t++) {
     if (String.fromCharCode(d[pos], d[pos + 1], d[pos + 2], d[pos + 3]) !== 'MTrk') break;
     const len = u32(d, pos + 4), end = pos + 8 + len;
@@ -66,7 +66,8 @@ export function parseMidiFile(buffer) {
         if (cmd === 0xc0 || cmd === 0xd0) { p.i += 1; }
         else {
           const a = d[p.i++], b = d[p.i++];
-          if (cmd === 0x90 && b > 0) { const k = ch * 128 + a; if (open.has(k)) { const o = open.get(k); notes.push({ tick: o.tick, dur: tick - o.tick, m: a, v: o.v, ch }); } open.set(k, { tick, v: b / 127 }); }
+          if (cmd === 0xb0 && a === 64) out.pedal.push({ tick, on: b >= 64 });
+          else if (cmd === 0x90 && b > 0) { const k = ch * 128 + a; if (open.has(k)) { const o = open.get(k); notes.push({ tick: o.tick, dur: tick - o.tick, m: a, v: o.v, ch }); } open.set(k, { tick, v: b / 127 }); }
           else if (cmd === 0x80 || (cmd === 0x90 && b === 0)) { const k = ch * 128 + a; const o = open.get(k); if (o) { notes.push({ tick: o.tick, dur: Math.max(1, tick - o.tick), m: a, v: o.v, ch }); open.delete(k); } }
         }
       }
@@ -75,6 +76,7 @@ export function parseMidiFile(buffer) {
     pos = end;
   }
   out.tempos.sort((a, b) => a.tick - b.tick);
+  out.pedal.sort((a, b) => a.tick - b.tick);
   return out;
 }
 
@@ -107,6 +109,13 @@ export function midiToSong(buffer, title = 'Imported MIDI') {
   const len = Math.max(...notes.map((n) => n.t + n.d));
   notes.forEach((n, i) => (n.id = i));
   const song = { id: 'midi-' + Date.now(), title, composer: 'Imported MIDI', tempo: Math.min(Math.max(tempo, 20), 300), tempoMap: tempoMap.length > 1 ? tempoMap : undefined, ts: mf.ts, key: mf.key, notes, length: len, bars: Math.ceil(len / barLength(mf.ts)), custom: true, source: 'midi', warnings: [] };
+  // sustain pedal (CC64) -> [[downBeat, upBeat], ...]
+  if (mf.pedal.length > 2) {
+    const iv = []; let down = null;
+    for (const e of mf.pedal) { const b = e.tick / mf.ppq; if (e.on && down == null) down = b; else if (!e.on && down != null) { if (b > down) iv.push([down, b]); down = null; } }
+    if (down != null) iv.push([down, len + 4]);
+    if (iv.length) song.pedal = iv;
+  }
   song.est = estimateDifficulty(song);
   song.level = song.est.label;
   return song;

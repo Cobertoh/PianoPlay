@@ -290,7 +290,8 @@
    "cat": "classical",
    "file": "library/midi/lib-743.mid",
    "bars": 84,
-   "sec": 125,
+   "sec": 136,
+   "tempoScale": 0.92,
    "notes": 2082,
    "license": "Public Domain",
    "mutopia": "ChopinFF/O10/op-10-12-wfi/op-10-12-wfi.mid"
@@ -430,7 +431,8 @@
    "cat": "classical",
    "file": "library/midi/lib-1590.mid",
    "bars": 38,
-   "sec": 202,
+   "sec": 253,
+   "tempoScale": 0.8,
    "notes": 1242,
    "license": "Creative Commons Attribution-ShareAlike 3.0",
    "mutopia": "ChopinFF/O9/chopin_nocturne_op9_n2/chopin_nocturne_op9_n2.mid"
@@ -486,7 +488,8 @@
    "cat": "classical",
    "file": "library/midi/lib-472.mid",
    "bars": 13,
-   "sec": 74,
+   "sec": 93,
+   "tempoScale": 0.8,
    "notes": 286,
    "license": "Public Domain",
    "mutopia": "ChopinFF/O28/Chop-28-20/Chop-28-20.mid"
@@ -528,7 +531,8 @@
    "cat": "classical",
    "file": "library/midi/lib-471.mid",
    "bars": 89,
-   "sec": 267,
+   "sec": 303,
+   "tempoScale": 0.88,
    "notes": 1517,
    "license": "Public Domain",
    "mutopia": "ChopinFF/O28/Chop-28-15/Chop-28-15.mid"
@@ -556,7 +560,8 @@
    "cat": "classical",
    "file": "library/midi/lib-468.mid",
    "bars": 26,
-   "sec": 108,
+   "sec": 123,
+   "tempoScale": 0.88,
    "notes": 600,
    "license": "Public Domain",
    "mutopia": "ChopinFF/O28/Chop-28-4/Chop-28-4.mid"
@@ -640,7 +645,8 @@
    "cat": "classical",
    "file": "library/midi/lib-23.mid",
    "bars": 144,
-   "sec": 144,
+   "sec": 180,
+   "tempoScale": 0.8,
    "notes": 2566,
    "license": "Public Domain",
    "mutopia": "JoplinS/maple/maple.mid"
@@ -822,7 +828,8 @@
    "cat": "classical",
    "file": "library/midi/lib-108.mid",
    "bars": 128,
-   "sec": 255,
+   "sec": 128,
+   "tempoScale": 2,
    "notes": 1614,
    "license": "Public Domain",
    "mutopia": "MozartWA/KV331/KV331_3_RondoAllaTurca/KV331_3_RondoAllaTurca.mid"
@@ -836,7 +843,8 @@
    "cat": "classical",
    "file": "library/midi/lib-2033.mid",
    "bars": 62,
-   "sec": 164,
+   "sec": 182,
+   "tempoScale": 0.9,
    "notes": 1719,
    "license": "Creative Commons Attribution-ShareAlike 4.0",
    "mutopia": "RachmaninoffS/O3/rach-prelude-op3-no2/rach-prelude-op3-no2.mid"
@@ -864,7 +872,8 @@
    "cat": "classical",
    "file": "library/midi/lib-2035.mid",
    "bars": 82,
-   "sec": 197,
+   "sec": 231,
+   "tempoScale": 0.85,
    "notes": 832,
    "license": "Creative Commons Attribution-ShareAlike 4.0",
    "mutopia": "SatieE/Gnossienne/no_1/no_1.mid"
@@ -878,7 +887,8 @@
    "cat": "classical",
    "file": "library/midi/lib-37.mid",
    "bars": 47,
-   "sec": 141,
+   "sec": 188,
+   "tempoScale": 0.75,
    "notes": 282,
    "license": "Public Domain",
    "mutopia": "SatieE/gymnopedie_1/gymnopedie_1.mid"
@@ -892,7 +902,8 @@
    "cat": "classical",
    "file": "library/midi/lib-38.mid",
    "bars": 65,
-   "sec": 195,
+   "sec": 260,
+   "tempoScale": 0.75,
    "notes": 371,
    "license": "Public Domain",
    "mutopia": "SatieE/gymnopedie_2/gymnopedie_2.mid"
@@ -906,7 +917,8 @@
    "cat": "classical",
    "file": "library/midi/lib-39.mid",
    "bars": 60,
-   "sec": 180,
+   "sec": 240,
+   "tempoScale": 0.75,
    "notes": 326,
    "license": "Public Domain",
    "mutopia": "SatieE/gymnopedie_3/gymnopedie_3.mid"

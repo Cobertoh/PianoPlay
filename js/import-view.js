@@ -1,10 +1,11 @@
 // PianoPlay - import screen: audio file / microphone recording / MIDI / YouTube link -> playable song.
 import { ico, esc, $, $$, toast, levelBadge, download } from './ui.js';
 import { decodeToMono, analyzeAudio, framesToSong, DEFAULTS } from './transcribe.js';
+import { analyzeForArrangement, arrangeSong, ARR_DEFAULTS } from './arrange.js';
 import { midiToSong, songToMidi } from './midi.js';
 import { midiToName, fmtTime } from './music.js';
 
-const iv = { tab: 'audio', analysis: null, song: null, opts: { ...DEFAULTS }, name: '', level: 'Auto', customN: 5, busy: false, cancel: false, rec: null, yt: null, source: '' };
+const iv = { tab: 'audio', mode: 'arrange', samples: null, analysis: null, song: null, opts: { ...DEFAULTS }, aopts: { ...ARR_DEFAULTS }, name: '', level: 'Auto', customN: 5, busy: false, cancel: false, rec: null, yt: null, source: '' };
 
 export function parseYouTube(url) {
   try {
@@ -28,6 +29,7 @@ function applyLevel(song) {
 }
 function regenerate() {
   if (!iv.analysis) return;
+  if (iv.analysis.kind === 'arrange') { const song = arrangeSong(iv.analysis, iv.aopts, iv.name || 'Imported song'); applyLevel(song); iv.song = song; return; }
   const o = { ...iv.opts }; if (o.split == null) delete o.split; if (o.bpm == null) delete o.bpm;
   const song = framesToSong(iv.analysis, o, iv.name || 'Imported song');
   applyLevel(song); iv.song = song;
@@ -50,11 +52,9 @@ export function renderImport(app, el) {
     try {
       const { samples, sr, duration, truncated } = await decodeToMono(buf);
       if (duration < 1) throw new Error('That audio is too short.');
-      busyView('Listening for notes…', 0.05);
-      const a = await analyzeAudio(samples, sr, { onProgress: (p) => { const b = $('#pbar', el); if (b) b.style.width = Math.round(p * 100) + '%'; }, shouldCancel: () => iv.cancel });
-      iv.analysis = a; iv.opts = { ...DEFAULTS };
-      regenerate();
-      if (!iv.song.notes.length) { toast('No clear notes were found. Try a cleaner recording or a lower sensitivity.'); }
+      iv.samples = { samples, sr };
+      await analyse();
+      if (!iv.song?.notes.length) { toast('No clear melody was found in that audio.'); }
       if (truncated) toast('Only the first 6 minutes were analysed.');
     } catch (e) {
       if (e.message !== 'cancelled') toast(e.message?.includes('decode') || e.name === 'EncodingError' ? 'Could not read that audio file. Try MP3, M4A or WAV.' : 'Import failed: ' + (e.message || e));
@@ -62,11 +62,21 @@ export function renderImport(app, el) {
     iv.busy = false; draw();
   }
 
+  async function analyse() {
+    const { samples, sr } = iv.samples;
+    const prog = { onProgress: (p) => { const b = $('#pbar', el); if (b) b.style.width = Math.round(p * 100) + '%'; }, shouldCancel: () => iv.cancel };
+    busyView(iv.mode === 'arrange' ? 'Finding the melody, beat and chords…' : 'Listening for every note…', 0.05);
+    $('#cancel', el)?.addEventListener('click', () => { iv.cancel = true; });
+    if (iv.mode === 'arrange') { iv.analysis = await analyzeForArrangement(samples, sr, prog); iv.aopts = { ...ARR_DEFAULTS }; }
+    else { iv.analysis = await analyzeAudio(samples, sr, prog); iv.opts = { ...DEFAULTS }; }
+    regenerate();
+  }
+
   function drawTab() {
     const t = tabEl(); if (iv.busy) return;
     if (iv.tab === 'audio') {
       t.innerHTML = `<label class="drop" id="drop">${ico('upload')}<div style="font-weight:700;font-size:17px">Choose an audio file</div><div class="small muted" style="margin-top:4px">MP3 · M4A · WAV · OGG · FLAC – up to 6 minutes</div><input type="file" id="f-audio" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.aac" hidden></label>
-        <div class="gap"></div><div class="note-box info small"><b>Works best with</b> solo piano or a clean instrumental melody. Full-band mixes, vocals, fast runs and thick chords come out rough – you can tune tempo, sensitivity and simplification afterwards. It all runs on your device; nothing is uploaded.</div>`;
+        <div class="gap"></div><div class="note-box info small">PianoPlay listens for the <b>main melody</b> (what you’d hum), the <b>beat</b> and the <b>chords</b>, ignores drums and background talking, and writes a piano version: melody in the right hand, chords in the left, with pedal. Instrumentals work best. Everything runs on your phone – nothing is uploaded.</div>`;
       const f = $('#f-audio', t); f.addEventListener('change', async () => { const file = f.files[0]; if (file) process(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, ''), 'audio'); });
       const drop = $('#drop', t); ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); })); ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove('over')));
       drop.addEventListener('drop', async (e) => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) process(await file.arrayBuffer(), file.name.replace(/\.[^.]+$/, ''), 'audio'); });
@@ -112,49 +122,61 @@ export function renderImport(app, el) {
   function drawResult() {
     const r = $('#result', el); if (!r) return;
     const s = iv.song; if (!s || iv.busy) { r.innerHTML = ''; return; }
-    const o = iv.opts, midi = iv.source === 'midi', info = s.analysisInfo || {};
-    const keyN = s.key; const lo = Math.min(...s.notes.map((n) => n.m)), hi = Math.max(...s.notes.map((n) => n.m));
-    const warn = [...(s.warnings || [])];
-    if (!midi && s.notes.length && info.confidence != null && info.confidence < 0.25) warn.push('The tempo was hard to pin down – try setting it manually.');
-    if (!midi && s.notes.length < 12) warn.push('Very few notes were found – raise the sensitivity or try a cleaner recording.');
+    const midi = iv.source === 'midi', arr = iv.analysis?.kind === 'arrange', o = iv.opts, ao = iv.aopts, info = s.analysisInfo || {};
     const sg = (k, opts, cur) => `<div class="seg" data-s="${k}">${opts.map(([v, t]) => `<button data-v="${v}" class="${String(cur) === String(v) ? 'on' : ''}">${t}</button>`).join('')}</div>`;
-    r.innerHTML = `<div class="section"><h2>Your song</h2></div>
-      <div class="card"><label class="l">Title</label><input class="fld" id="ttl" value="${esc(iv.name)}" maxlength="60">
-        <div class="stats" style="margin-top:12px"><div class="stat"><b>${s.notes.length}</b><span>notes</span></div><div class="stat"><b>${s.bars}</b><span>bars</span></div><div class="stat"><b>${s.tempo}</b><span>BPM · ${esc(keyN)}</span></div></div>
-        <p class="small muted" style="margin:10px 2px 0">Range ${s.notes.length ? midiToName(lo) + ' – ' + midiToName(hi) : '–'} · estimated difficulty ${levelBadge(s.est.label)}</p>
-        ${warn.length ? `<div class="gap"></div><div class="note-box small">${warn.map((w) => '• ' + esc(w)).join('<br>')}</div>` : ''}
-        ${!midi ? `<div class="note-box small" style="margin-top:10px">Transcribed from audio – it’s an <b>approximation</b>. Adjust the controls below until the sheet music matches what you hear.</div>` : ''}</div>
-      ${!midi ? `<div class="section"><h2>Tune the transcription</h2></div><div class="card">
+    const prog = (s.chordsInfo || []);
+    const loop = (() => { // the most common 4-chord loop, for the learn panel
+      const names = prog.map((c) => c.name); const cnt = new Map();
+      for (let i = 0; i + 4 <= names.length; i++) { const k = names.slice(i, i + 4).join(' – '); cnt.set(k, (cnt.get(k) || 0) + 1); }
+      let best = names.slice(0, 4).join(' – '), bc = 0; for (const [k, c] of cnt) if (c > bc) { bc = c; best = k; } return best;
+    })();
+    r.innerHTML = `<div class="section"><h2>Your piano version</h2></div>
+      <div class="card"><input class="fld" id="ttl" value="${esc(iv.name)}" maxlength="60" aria-label="Title">
+        <p class="small muted" style="margin:10px 2px 0">${s.tempo} BPM · key of ${esc(s.key)} · ${s.bars} bars · ${levelBadge(s.est.label)}</p>
+        <div class="gap"></div>
+        <div class="row"><button class="btn grow" id="listen">${ico('play')} Listen</button><button class="btn ghost grow" id="prac">${ico('music')} Learn it</button></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm ghost grow" id="save">${ico('check')} Save</button><button class="btn sm ghost grow" id="mid">${ico('download')} MIDI</button></div></div>
+      ${arr ? `<div class="section"><h2>Make it sound right</h2></div><div class="card">
+        <label class="l">Left hand</label>${sg('style', [['simple', 'Simple'], ['flow', 'Flowing'], ['full', 'Full']], ao.style)}
+        <div class="gap"></div><label class="l">Melody</label>${sg('detail', [['simple', 'Fewer notes'], ['normal', 'Normal'], ['detailed', 'More detail']], ao.detail)}
+        <div class="gap"></div><label class="l">Speed felt wrong? <span class="faint">(${s.tempo} BPM)</span></label>
+        <div class="row"><button class="btn sm ghost grow" data-bpm="0.5">Half speed</button><button class="btn sm ghost grow" data-bpm="2">Double speed</button></div>
+        <div class="gap"></div><label class="l">Melody octave</label><div class="row"><button class="btn sm ghost grow" data-oct="-1">Lower</button><button class="btn sm ghost grow" data-oct="1">Higher</button></div>
+      </div>
+      <div class="section"><h2>Learn it yourself</h2></div>
+      <div class="card small" style="line-height:1.65">
+        <b style="color:#fff">The chords:</b> ${prog.length ? esc(loop) : 'none found'}${prog.length > 4 ? ' <span class="faint">(the main loop)</span>' : ''}<br>
+        1. <b>Right hand first.</b> Open <i>Learn it</i>, pick <i>Right</i> and play the melody at 60% speed. Hum it while you play.<br>
+        2. <b>Left hand chords.</b> Switch to <i>Left</i>. Each chord is the root + fifth + third, broken up. Say the chord names out loud.<br>
+        3. <b>Hands together, slowly.</b> Loop 2 bars at a time; the pedal goes down on every new chord.<br>
+        4. <b>Speed up</b> by 10% each time you get three clean runs.<br>
+        <span class="faint">Tip: most songs repeat one 4-chord loop. Learn that loop and you can play along with the original track.</span></div>` : ''}
+      ${!arr && !midi ? `<div class="section"><h2>Tune the notes</h2></div><div class="card">
         <label class="l">Tempo <span id="bpmv">${s.tempo} BPM</span></label><div class="row"><button class="btn sm ghost" data-bpm="0.5">½×</button><input type="range" id="bpm" min="40" max="200" value="${s.tempo}" class="grow"><button class="btn sm ghost" data-bpm="2">2×</button></div>
         <label class="l" style="margin-top:8px">Note sensitivity <span id="sensv">${o.sens.toFixed(1)}×</span></label><input type="range" id="sens" min="0.5" max="2" step="0.1" value="${o.sens}">
-        <label class="l" style="margin-top:8px">Simplify – max notes per hand <span id="maxv">${o.maxPerHand}</span></label><input type="range" id="maxp" min="1" max="6" value="${o.maxPerHand}">
-        <div class="gap"></div><label class="l">Rhythm grid</label>${sg('grid', [[0.25, 'Fine'], [0.5, 'Medium'], [1, 'Simple']], o.grid)}
-        <div class="gap"></div><label class="l">Time signature</label>${sg('ts', [['4,4', '4/4'], ['3,4', '3/4'], ['2,4', '2/4'], ['6,8', '6/8']], o.ts.join(','))}
-        <label class="l" style="margin-top:12px">Left / right hand split <span id="splv">${o.split == null ? 'auto (' + midiToName(info.split ?? 60) + ')' : midiToName(o.split)}</span></label><input type="range" id="split" min="48" max="72" value="${o.split ?? info.split ?? 60}">
+        <label class="l" style="margin-top:8px">Max notes per hand <span id="maxv">${o.maxPerHand}</span></label><input type="range" id="maxp" min="1" max="6" value="${o.maxPerHand}">
       </div>` : ''}
-      <div class="section"><h2>Difficulty rating</h2></div>
-      <div class="card">${sg('level', [['Auto', 'Auto'], ['Beginner', 'Easy'], ['Intermediate', 'Medium'], ['Advanced', 'Hard'], ['Custom', 'Custom']], iv.level)}
-        ${iv.level === 'Custom' ? `<div class="gap"></div><label class="l">Your rating <span id="cv">${iv.customN} / 10</span></label><input type="range" id="cust" min="1" max="10" value="${iv.customN}">` : ''}
-        <p class="small muted" style="margin:10px 2px 0">Shown as ${levelBadge(s.level)} — ${iv.level === 'Auto' ? 'estimated from speed, hand stretch, chords, accidentals and note count.' : 'set by you.'}</p></div>
-      <div class="gap"></div>
-      <div class="row wrapx"><button class="btn grow" id="prac">${ico('play')} Practice</button><button class="btn ghost" id="save">${ico('check')} Save</button><button class="btn ghost" id="mid">${ico('download')} MIDI</button></div>`;
-    const redo = () => { regenerate(); drawResult(); };
+      ${!midi && iv.samples ? `<div class="gap"></div><button class="btn sm ghost block" id="mode">${arr ? 'This is solo piano – transcribe every note instead' : 'Make a piano arrangement instead'}</button>` : ''}
+      <div class="section"><h2>Difficulty</h2></div>
+      <div class="card">${sg('level', [['Auto', 'Auto'], ['Beginner', 'Easy'], ['Intermediate', 'Medium'], ['Advanced', 'Hard']], iv.level)}</div>`;
+    const redo = () => { try { regenerate(); } catch (x) { toast(x.message); } drawResult(); };
     let tm; const later = () => { clearTimeout(tm); tm = setTimeout(redo, 250); };
     $('#ttl', r).addEventListener('input', (e) => { iv.name = e.target.value; s.title = iv.name; });
     $('#bpm', r)?.addEventListener('input', (e) => { iv.opts.bpm = +e.target.value; $('#bpmv', r).textContent = e.target.value + ' BPM'; later(); });
-    $$('[data-bpm]', r).forEach((b) => b.addEventListener('click', () => { iv.opts.bpm = Math.max(40, Math.min(200, Math.round(s.tempo * +b.dataset.bpm))); redo(); }));
+    $$('[data-bpm]', r).forEach((b) => b.addEventListener('click', () => { const v = Math.max(40, Math.min(200, Math.round(s.tempo * +b.dataset.bpm))); if (arr) iv.aopts.bpm = v; else iv.opts.bpm = v; redo(); }));
+    $$('[data-oct]', r).forEach((b) => b.addEventListener('click', () => { iv.aopts.octave = Math.max(-2, Math.min(2, iv.aopts.octave + +b.dataset.oct)); redo(); }));
     $('#sens', r)?.addEventListener('input', (e) => { iv.opts.sens = +e.target.value; $('#sensv', r).textContent = (+e.target.value).toFixed(1) + '×'; later(); });
     $('#maxp', r)?.addEventListener('input', (e) => { iv.opts.maxPerHand = +e.target.value; $('#maxv', r).textContent = e.target.value; later(); });
-    $('#split', r)?.addEventListener('input', (e) => { iv.opts.split = +e.target.value; $('#splv', r).textContent = midiToName(+e.target.value); later(); });
-    $('#cust', r)?.addEventListener('input', (e) => { iv.customN = +e.target.value; $('#cv', r).textContent = e.target.value + ' / 10'; applyLevel(s); });
+    $('#mode', r)?.addEventListener('click', async () => { iv.mode = arr ? 'exact' : 'arrange'; iv.busy = true; iv.cancel = false; drawResult(); try { await analyse(); } catch (x) { if (x.message !== 'cancelled') toast(x.message); } iv.busy = false; draw(); });
     r.onclick = (e) => {
       const sg1 = e.target.closest('[data-s] button'); if (!sg1) return;
       const k = sg1.parentElement.dataset.s, v = sg1.dataset.v;
-      if (k === 'grid') { iv.opts.grid = +v; redo(); } else if (k === 'ts') { iv.opts.ts = v.split(',').map(Number); redo(); }
+      if (k === 'style' || k === 'detail') { iv.aopts[k] = v; redo(); }
       else if (k === 'level') { iv.level = v; applyLevel(s); drawResult(); }
     };
-    const finalize = () => { s.title = (iv.name || 'My song').trim() || 'My song'; s.id = s.id.startsWith('import-') || s.id.startsWith('midi-') ? s.id : s.id; applyLevel(s); app.store.addCustom(s); };
+    const finalize = () => { s.title = (iv.name || 'My song').trim() || 'My song'; applyLevel(s); app.store.addCustom(s); };
     $('#save', r).addEventListener('click', () => { finalize(); toast('Saved to Songs → My imports'); });
+    $('#listen', r).addEventListener('click', () => { finalize(); app.play(s, { mode: 'watch', onClose: () => app.route() }); });
     $('#prac', r).addEventListener('click', () => { if (!s.notes.length) { toast('There are no notes to practise yet.'); return; } finalize(); app.play(s, { mode: 'learn', onClose: () => app.route() }); });
     $('#mid', r).addEventListener('click', () => download((iv.name || 'song').replace(/[^\w-]+/g, '_') + '.mid', songToMidi(s), 'audio/midi'));
   }
