@@ -66,3 +66,25 @@ export function pianoNotesToSong(notes, duration, opts = {}, title = 'Piano reco
   song.analysisInfo = { bpm: Math.round(bpm), notes: notesOut.length, key, meter: ts[0] };
   return song;
 }
+
+/**
+ * Full songs: keep everything that is pitched (vocals, guitar, keys, bass) and drop what drums and
+ * noise leave behind – short, quiet blips with no steady pitch behind them, kick-drum thumps, and
+ * notes outside a sensible range. `an` is a harmonic (drum-free) spectrogram from analyzeForArrangement.
+ */
+export function filterSongNotes(notes, an) {
+  const K = 85, LO = 24;
+  const keep = notes.filter((n) => {
+    const dur = n.t1 - n.t0;
+    if (n.m < 28 || n.m > 100) return false;
+    let s = 0, c = 0; const k = n.m - LO;
+    for (let f = Math.floor(n.t0 / an.hopSec); f < Math.min(an.nF, Math.ceil(n.t1 / an.hopSec)); f++) { s += an.L[f * K + k]; c++; }
+    const steady = c ? s / c : 0;
+    if (steady < 0.3 && n.a < 0.6 && dur < 0.3) return false;     // a hit, not a note
+    if (dur < 0.15 && n.a < 0.45) return false;                     // quiet blip
+    if (n.m < 40 && dur < 0.2) return false;                        // kick drum thump
+    return true;
+  });
+  // never more than 6 notes at once – keep the loudest
+  return keep.filter((n) => { const sim = keep.filter((b) => b.t0 <= n.t0 + 0.01 && b.t1 > n.t0 + 0.01); if (sim.length <= 6) return true; sim.sort((a, b) => b.a - a.a); return sim.indexOf(n) < 6; });
+}
