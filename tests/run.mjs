@@ -34,7 +34,7 @@ for (const s of lib) {
 }
 console.log('\nlevels:'); for (const s of lib) console.log('  ', s.level.padEnd(13), 'est', s.est.label.padEnd(13), s.est.score.toFixed(2), s.title);
 
-const extra = process.argv.includes('--quick') ? [] : ['./detect.mjs', './transcribe.mjs', './arrange.mjs'];
+const extra = process.argv.includes('--quick') ? [] : ['./detect.mjs', './transcribe.mjs', './arrange.mjs', './basicpitch.mjs'];
 for (const f of extra) { try { const m = await import(f); const r = await m.run(t); } catch (e) { fail++; console.log('  FAIL suite', f, e.message); } }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

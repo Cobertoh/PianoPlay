@@ -147,9 +147,10 @@ export class Session {
       if (n.t < this.beat - 0.05 && n.t < next - 0.05) continue;
       const mine = this.isPracticed(n);
       if (this.mode === 'watch' || (!mine && this.accompaniment)) {
-        const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, n.t) / this.speed + (Math.random() - 0.5) * 0.008);
-        const endB = this.perf.end.get(n.id) ?? n.t + n.d;
-        this.audio.play(n.m, Math.max(0.12, this.clock.sec(n.t, endB) / this.speed - 0.01), this.perf.vel.get(n.id) ?? 0.7, when);
+        // transcribed recordings carry their exact timing (tx/dx); everything else plays as written
+        const t0 = n.tx ?? n.t, endB = n.dx != null ? n.tx + n.dx : (this.perf.end.get(n.id) ?? n.t + n.d);
+        const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, t0) / this.speed + (n.tx != null ? 0 : (Math.random() - 0.5) * 0.008));
+        this.audio.play(n.m, Math.max(0.08, this.clock.sec(t0, endB) / this.speed - 0.01), this.perf.vel.get(n.id) ?? 0.7, when);
       }
     }
   }

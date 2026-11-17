@@ -1,0 +1,68 @@
+// PianoPlay - solo piano recording -> exact song. Notes come from Basic Pitch (js/basicpitch.js);
+// here they get a beat grid that follows the player (tempo map from beat tracking, so rubato is kept),
+// a time signature, hands, and dynamics. Playback uses the exact recorded timing (n.tx / n.dx);
+// the sheet music uses the same notes quantised to the nearest 16th.
+import { tempoOf, trackBeats } from './arrange.js';
+import { buildSong } from './music.js';
+import { detectKey } from './transcribe.js';
+
+export function pianoNotesToSong(notes, duration, opts = {}, title = 'Piano recording') {
+  if (!notes.length) throw new Error('No piano notes were found in this recording.');
+  const fps = 100, n = Math.ceil(duration * fps) + 2;
+  const env = new Float32Array(n), bassEnv = new Float32Array(n);
+  const groups = new Map();
+  for (const x of notes) { const f = Math.round(x.t0 * fps); env[f] += x.a; (groups.get(f) || groups.set(f, []).get(f)).push(x); }
+  for (const [f, g] of groups) { const low = g.reduce((a, b) => (b.m < a.m ? b : a)); if (low.m < 60) bassEnv[f] += low.a + (low.t1 - low.t0) * 0.3; }
+  const smooth = (a) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) for (let d = -2; d <= 2; d++) { const j = i + d; if (j >= 0 && j < a.length) o[i] += a[j] * [0.1, 0.2, 0.4, 0.2, 0.1][d + 2]; } return o; };
+  const an = { flux: smooth(env), hopSec: 1 / fps, duration };
+  const bpm = opts.bpm || tempoOf(an).bpm;
+  const beats = trackBeats(an, bpm);
+  // time signature + downbeat from the bass: the strongest low notes fall on beat 1
+  const bAt = (i) => { const f = Math.round(beats[i] * fps); let s = 0; for (let d = -3; d <= 3; d++) s += bassEnv[f + d] || 0; return s; };
+  let best = { meter: 4, off: 0, contrast: 0 };
+  for (const meter of opts.ts ? [opts.ts[0]] : [4, 3]) {
+    const sums = new Array(meter).fill(0); for (let i = 0; i < beats.length; i++) sums[i % meter] += bAt(i);
+    const mean = sums.reduce((a, b) => a + b, 0) / meter, mx = Math.max(...sums), off = sums.indexOf(mx);
+    const contrast = mean ? mx / mean : 1;
+    if (contrast * (meter === 4 ? 1.12 : 1) > best.contrast) best = { meter, off, contrast: contrast * (meter === 4 ? 1.12 : 1) };
+  }
+  const ts = opts.ts || [best.meter, 4], bl = ts[0];
+  const spb = 60 / bpm;
+  const tToBeat = (t) => {
+    if (t <= beats[0]) return (t - beats[0]) / spb;
+    let lo = 0, hi = beats.length - 2;
+    if (t >= beats[hi + 1]) return hi + 1 + (t - beats[hi + 1]) / spb;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (beats[mid] <= t) lo = mid; else hi = mid - 1; }
+    return lo + (t - beats[lo]) / (beats[lo + 1] - beats[lo]);
+  };
+  const first = tToBeat(notes[0].t0);
+  let start = best.off; while (start + bl <= first + 0.2) start += bl; while (start > first + 0.2) start -= bl;
+  // tempo map that follows the player beat by beat (merged where it barely changes)
+  const tempoMap = [];
+  for (let i = 0; i + 1 < beats.length; i++) {
+    const b = i - start; if (b < -1) continue;
+    const v = 60 / (beats[i + 1] - beats[i]), prev = tempoMap[tempoMap.length - 1];
+    if (prev && Math.abs(prev.bpm - v) / prev.bpm < 0.003) continue;
+    tempoMap.push({ beat: Math.max(0, b), bpm: v });
+  }
+  if (!tempoMap.length || tempoMap[0].beat > 0) tempoMap.unshift({ beat: 0, bpm });
+  // notes
+  const ampMax = Math.max(...notes.map((x) => x.a));
+  const raw = notes.map((x) => { const tx = tToBeat(x.t0) - start, ex = tToBeat(x.t1) - start; return { tx, dx: Math.max(0.05, ex - tx), m: x.m, vel: Math.min(1, 0.3 + 0.75 * Math.max(0, (x.a - 0.25) / Math.max(0.2, ampMax - 0.25))) }; }).filter((x) => x.tx > -0.5);
+  // hands: split around the middle of what is being played in each two-bar stretch
+  const win = bl * 2, splitAt = new Map();
+  for (const x of raw) { const k = Math.floor(x.tx / win); (splitAt.get(k) || splitAt.set(k, []).get(k)).push(x.m); }
+  for (const [k, ms] of splitAt) { ms.sort((a, b) => a - b); const lo = ms[0], hi = ms[ms.length - 1]; let s = hi - lo > 12 ? (lo + hi) / 2 : (ms[Math.floor(ms.length / 2)] >= 60 ? 48 : 72); splitAt.set(k, Math.max(50, Math.min(67, s))); }
+  const out = raw.map((x) => {
+    const t = Math.max(0, Math.round(x.tx * 4) / 4), d = Math.max(0.25, Math.round(x.dx * 4) / 4);
+    return { t, d: Math.min(d, bl * 2), m: x.m, h: x.m >= (splitAt.get(Math.floor(x.tx / win)) ?? 60) ? 'R' : 'L', vel: x.vel, tx: Math.max(-0.4, x.tx), dx: x.dx };
+  });
+  // merge duplicates created by quantisation (same pitch, same slot)
+  const seen = new Map(), notesOut = [];
+  for (const x of out.sort((a, b) => a.t - b.t || a.m - b.m)) { const k = x.t + ':' + x.m; const p = seen.get(k); if (p) { p.d = Math.max(p.d, x.d); continue; } seen.set(k, x); notesOut.push(x); }
+  const key = detectKey(notesOut.map((x) => ({ m: x.m, d: x.d })));
+  const song = buildSong({ id: 'import-' + Date.now(), title, composer: 'Piano recording', era: 'Custom', cat: 'custom', custom: true, source: 'audio', key, tempo: Math.round(bpm), tempoMap: tempoMap.length > 1 ? tempoMap : undefined, ts, notes: notesOut, exact: true, pedalStyle: 'none',
+    desc: 'Transcribed note-for-note from a piano recording. Playback follows the recording’s exact timing; the sheet music is rounded to the nearest 16th note.' });
+  song.analysisInfo = { bpm: Math.round(bpm), notes: notesOut.length, key, meter: ts[0] };
+  return song;
+}

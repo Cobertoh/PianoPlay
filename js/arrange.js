@@ -183,7 +183,7 @@ function segmentMelody(an, { path, str }, L = an.L) {
 
 // ------------------------------------------------------------------ 3. beats & chords
 /** Tempo from onset autocorrelation, scored with its multiples and subdivision so that 2/3 and 3/2 errors lose. */
-function tempoOf(an) {
+export function tempoOf(an) {
   const { flux, hopSec } = an, n = flux.length, w = Math.round(0.4 / hopSec);
   const o = new Float32Array(n); let run = 0;
   for (let i = 0; i < n; i++) { run += flux[i]; if (i >= w) run -= flux[i - w]; o[i] = Math.max(0, flux[i] - run / Math.min(i + 1, w)); }
@@ -201,7 +201,7 @@ function tempoOf(an) {
   return { bpm, confidence: conf };
 }
 
-function trackBeats(an, bpm) {
+export function trackBeats(an, bpm) {
   const { flux, hopSec } = an, n = flux.length;
   const o = new Float32Array(n), w = Math.round(0.4 / hopSec);
   let run = 0; for (let i = 0; i < n; i++) { run += flux[i]; if (i >= w) run -= flux[i - w]; o[i] = Math.max(0, flux[i] - run / Math.min(i + 1, w)); }
