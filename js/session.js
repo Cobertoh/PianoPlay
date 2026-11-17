@@ -3,7 +3,7 @@
 //   watch : the song plays itself (demo)
 //   learn : "wait mode" – notes fall and stop at the keyboard until you play them (Simply-Piano style)
 //   play  : "flow mode" – everything keeps moving; hits and misses are scored by timing
-import { stepsOf, barLength } from './music.js';
+import { stepsOf, barLength, tempoClock } from './music.js';
 
 export const MODES = ['watch', 'learn', 'play'];
 
@@ -23,12 +23,15 @@ export class Session {
     this.beat = 0; this.running = false;
     this.notes = song.notes;
     this.sorted = [...this.notes].sort((a, b) => a.t - b.t);
+    this.sortedExact = song.audioNotes ? [...song.audioNotes].sort((a, b) => a.t - b.t) : null;
     this.bl = barLength(song.ts);
+    this.clock = tempoClock(song);
     this._tick = this._tick.bind(this);
     this.reset();
   }
 
-  get bps() { return (this.song.tempo / 60) * this.speed; }
+  get ps() { return this.mode === 'watch' && this.sortedExact && this.exactTiming !== false ? this.sortedExact : this.sorted; }
+  get bps() { return (this.clock.bpm(Math.max(this.beat, 0)) / 60) * this.speed; }
   get practiced() { return this.hand === 'both' ? this.notes : this.notes.filter((n) => (this.hand === 'R' ? n.h !== 'L' : n.h === 'L')); }
   isPracticed(n) { return this.hand === 'both' || (this.hand === 'R' ? n.h !== 'L' : n.h === 'L'); }
 
@@ -60,7 +63,7 @@ export class Session {
   }
   _setBeat(b) { this.beat = b; this._pushFrame(); }
   _pushFrame() { this.stage.setBeat(this.beat); this.sheet?.setBeat(Math.max(0, this.beat)); this.emit({ type: 'beat', beat: this.beat }); }
-  _syncPtr() { let i = 0; while (i < this.sorted.length && this.sorted[i].t < this.beat - 1e-6) i++; this.ptr = i; }
+  _syncPtr() { const L = this.ps; let i = 0; while (i < L.length && L[i].t < this.beat - 1e-6) i++; this.ptr = i; }
 
   // ------------------------------------------------------------ transport
   async start() {
@@ -131,19 +134,20 @@ export class Session {
     // --- end
     if (this.beat >= this.song.length + (this.mode === 'play' ? 0.6 : 0.2) && !this.loop) this._finish();
   }
-  _syncPtrAt(b) { let i = 0; while (i < this.sorted.length && this.sorted[i].t < b - 1e-6) i++; this.ptr = i; }
+  _syncPtrAt(b) { const L = this.ps; let i = 0; while (i < L.length && L[i].t < b - 1e-6) i++; this.ptr = i; }
 
   _schedule(next, blockAt) {
     const bps = this.bps, ahead = 0.1 * bps;
     const limit = Math.min(next + ahead, this.mode === 'learn' ? blockAt + 1e-6 : Infinity);
     const spb = 1 / bps;
-    while (this.ptr < this.sorted.length && this.sorted[this.ptr].t <= limit) {
-      const n = this.sorted[this.ptr++];
+    const L = this.ps;
+    while (this.ptr < L.length && L[this.ptr].t <= limit) {
+      const n = L[this.ptr++];
       if (n.t < this.beat - 0.05 && n.t < next - 0.05) continue;
       const mine = this.isPracticed(n);
       if (this.mode === 'watch' || (!mine && this.accompaniment)) {
-        const when = this.audio.now + Math.max(0, (n.t - this.beat) * spb);
-        this.audio.play(n.m, Math.max(0.12, n.d * spb * 0.97), n.h === 'L' ? 0.62 : 0.78, when);
+        const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, n.t) / this.speed);
+        this.audio.play(n.m, Math.max(0.12, this.clock.sec(n.t, n.t + n.d) / this.speed * 0.97), n.vel ?? (n.h === 'L' ? 0.62 : 0.78), when);
       }
     }
   }
@@ -152,7 +156,7 @@ export class Session {
     const bps = this.bps;
     for (let b = this.lastClick + 1; b <= Math.floor(next + 0.1 * bps); b++) {
       if (b < this.lastClick + 1) continue;
-      const when = this.audio.now + Math.max(0, (b - this.beat) / bps);
+      const when = this.audio.now + Math.max(0, this.clock.sec(this.beat, b) / this.speed);
       if (b >= -this.bl * 2) this.audio.click(when, b % Math.round(this.bl) === 0);
       this.lastClick = b;
     }

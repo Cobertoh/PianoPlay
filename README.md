@@ -42,3 +42,8 @@ No build step: plain ES modules.
 
 ## Credits
 Music-notation glyph outlines are from GNU FreeFont's FreeSerif (GPL with font exception).
+
+
+## Credits
+- Sheet music / MIDI: [Mutopia Project](https://www.mutopiaproject.org) (public domain or Creative Commons; licence per piece in `library/index.json`). Rebuild with `node tools/build-library.mjs <path to falling-notes clone>`.
+- Piano samples: Salamander Grand Piano by Alexander Holm, CC BY 3.0.

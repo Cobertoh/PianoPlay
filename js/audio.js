@@ -1,4 +1,4 @@
-// PianoPlay - Web Audio piano synthesiser (no samples needed, works offline) and metronome.
+// PianoPlay - piano engine: Salamander Grand Piano samples (CC BY 3.0, Alexander Holm) with a synth fallback, plus metronome.
 
 let shared = null;
 
@@ -11,9 +11,9 @@ export class AudioEngine {
     this.comp = this.ctx.createDynamicsCompressor();
     this.comp.threshold.value = -14; this.comp.knee.value = 18; this.comp.ratio.value = 3; this.comp.attack.value = 0.004; this.comp.release.value = 0.25;
     this.dry = this.ctx.createGain(); this.dry.gain.value = 0.85;
-    this.wet = this.ctx.createGain(); this.wet.gain.value = 0.2;
+    this.wet = this.ctx.createGain(); this.wet.gain.value = 0.13;
     this.verb = this.ctx.createConvolver();
-    this.verb.buffer = this._impulse(2.2, 3.2);
+    this.verb.buffer = this._impulse(2.6, 3.0);
     this.master.connect(this.dry); this.master.connect(this.verb);
     this.verb.connect(this.wet);
     this.dry.connect(this.comp); this.wet.connect(this.comp);
@@ -23,7 +23,49 @@ export class AudioEngine {
     this.volume = 0.9;
     this.noise = this._noiseBuffer();
     this.waves = this._waves();
+    this.samples = []; this.sampleStatus = 'loading';
+    this.loadSamples();
   }
+  /** Load the grand-piano sample set (every 3rd note; the rest are pitch-shifted by ≤ 2 semitones). */
+  async loadSamples() {
+    const names = ['A0']; for (let o = 1; o <= 7; o++) for (const n of ['C', 'Ds', 'Fs', 'A']) names.push(n + o); names.push('C8');
+    const base = { C: 0, Ds: 3, Fs: 6, A: 9 };
+    try {
+      const list = await Promise.all(names.map(async (nm) => {
+        const r = await fetch(`samples/piano/${nm}.mp3`); if (!r.ok) return null;
+        const buf = await this.ctx.decodeAudioData(await r.arrayBuffer());
+        const [, n, o] = nm.match(/^([A-Za-z]+)(\d)$/);
+        return { m: 12 * (+o + 1) + base[n], buf };
+      }));
+      this.samples = list.filter(Boolean).sort((a, b) => a.m - b.m);
+      this.sampleStatus = this.samples.length > 8 ? 'ready' : 'failed';
+    } catch { this.sampleStatus = 'failed'; }
+  }
+  _sampleFor(m) { let best = null; for (const s of this.samples) if (!best || Math.abs(s.m - m) < Math.abs(best.m - m)) best = s; return best; }
+  _sampleNote(m, vel, t) {
+    const ctx = this.ctx, smp = this._sampleFor(m), v = Math.min(1, Math.max(0.05, vel));
+    const src = ctx.createBufferSource(); src.buffer = smp.buf; src.playbackRate.value = Math.pow(2, (m - smp.m) / 12);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.3; lp.frequency.value = Math.min(18000, 1400 + 16000 * v * v);
+    const g = ctx.createGain(); g.gain.value = 0.35 + 1.0 * v * v;
+    src.connect(lp); lp.connect(g); g.connect(this.master); src.start(t);
+    const dur = smp.buf.duration / src.playbackRate.value;
+    const voice = {
+      m, released: false,
+      release: (at = ctx.currentTime, rel = 0.22) => {
+        if (voice.released) return; voice.released = true;
+        const r = Math.max(at, ctx.currentTime);
+        g.gain.cancelScheduledValues(r); g.gain.setValueAtTime(g.gain.value, r); g.gain.setTargetAtTime(0, r, Math.max(0.03, rel / 3.5));
+        try { src.stop(r + rel * 2 + 0.15); } catch {}
+        setTimeout(() => this.voices.delete(voice), (r - ctx.currentTime + rel * 2 + 0.3) * 1000);
+      },
+      kill: () => { try { src.stop(); g.disconnect(); } catch {} this.voices.delete(voice); },
+    };
+    setTimeout(() => this.voices.delete(voice), ((t - ctx.currentTime) + dur + 0.2) * 1000);
+    this.voices.add(voice);
+    if (this.voices.size > 72) { const first = this.voices.values().next().value; first.release(ctx.currentTime, 0.08); }
+    return voice;
+  }
+
   _impulse(sec, decay) {
     const len = Math.floor(this.ctx.sampleRate * sec);
     const buf = this.ctx.createBuffer(2, len, this.ctx.sampleRate);
@@ -65,6 +107,7 @@ export class AudioEngine {
   noteOn(m, vel = 0.75, when = this.ctx.currentTime) {
     if (this.muted) return { release() {} };
     const ctx = this.ctx, t = Math.max(when, ctx.currentTime);
+    if (this.sampleStatus === 'ready') return this._sampleNote(m, vel, t);
     const f = 440 * Math.pow(2, (m - 69) / 12);
     const wave = m < 50 ? this.waves.low : m < 78 ? this.waves.mid : this.waves.high;
     const v = Math.min(1, Math.max(0.05, vel));

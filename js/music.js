@@ -233,16 +233,23 @@ export const LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
 export function estimateDifficulty(song) {
   const notes = song.notes;
   if (!notes.length) return { label: 'Beginner', score: 0, features: {} };
-  const tempo = song.tempo || 90;
+  const clock = tempoClock(song);
   const len = Math.max(song.length || 1, 1);
-  const dur = len * (60 / tempo);
+  const dur = Math.max(1, clock.sec(0, len));
   const onsetKeys = [...new Set(notes.map((n) => Math.round(n.t * 1000)))].sort((a, b) => a - b);
+  const onsetSec = onsetKeys.map((k) => clock.sec(0, k / 1000));
   const nps = onsetKeys.length / dur;
+  // peak onset density: 90th percentile of 2-second windows (so one busy passage counts, silence doesn't dilute)
+  const wins = []; for (let w = 0; w < dur; w += 1) { let c = 0; for (const t of onsetSec) if (t >= w && t < w + 2) c++; wins.push(c / 2); }
+  wins.sort((a, b) => a - b); const peak = wins[Math.floor(wins.length * 0.9)] || nps;
   // per-hand range (hand stretch matters, not the distance between the hands)
   const span = (h) => { const ms = notes.filter((n) => (n.h === 'L') === (h === 'L')).map((n) => n.m); return ms.length ? Math.max(...ms) - Math.min(...ms) : 0; };
   const range = Math.max(span('R'), span('L'));
   // simultaneous notes at each onset -> 90th percentile
-  const sims = onsetKeys.map((k) => { const t = k / 1000; return notes.filter((n) => n.t <= t + 1e-6 && n.t + n.d > t + 1e-6).length; }).sort((a, b) => a - b);
+  const sorted = [...notes].sort((a, b) => a.t - b.t);
+  const sims = []; let lo = 0;
+  for (const k of onsetKeys) { const t = k / 1000; while (lo < sorted.length && sorted[lo].t + sorted[lo].d <= t + 1e-6) lo++; let c = 0; for (let i = lo; i < sorted.length && sorted[i].t <= t + 1e-6; i++) if (sorted[i].t + sorted[i].d > t + 1e-6) c++; sims.push(c); }
+  sims.sort((a, b) => a - b);
   const maxSim = sims[Math.floor(sims.length * 0.9)] || 1;
   // both hands active ratio
   const slots = Math.ceil(len * 2);
@@ -264,12 +271,14 @@ export function estimateDifficulty(song) {
   for (let i = 1; i < rh.length; i++) if (rh[i].t > rh[i - 1].t) { leap += Math.abs(rh[i].m - rh[i - 1].m); ln++; }
   const avgLeap = ln ? leap / ln : 0;
   const c = (x) => Math.min(Math.max(x, 0), 1);
-  const speed = c((nps - 1.5) / 5.5), density = c((maxSim - 2) / 4), rng = c((range - 14) / 22);
-  const hands = bothRatio, acc = c(accFrac * 4), lp = c((avgLeap - 2.5) / 5), size = c(notes.length / 500);
-  const score = 0.30 * speed + 0.14 * density + 0.14 * rng + 0.08 * hands + 0.12 * acc + 0.12 * lp + 0.10 * size;
-  const label = score < 0.22 ? 'Beginner' : score < 0.5 ? 'Intermediate' : 'Advanced';
-  return { label, score, features: { nps, range, maxSim, bothRatio, accFrac, avgLeap, notes: notes.length } };
+  const speed = c((peak - 2) / 9), avgSpeed = c((nps - 1.2) / 5), density = c((maxSim - 2) / 4), rng = c((range - 14) / 22);
+  const acc = c(accFrac * 5), lp = c((avgLeap - 2.5) / 5), size = c(Math.log2(notes.length / 120) / 4), rhythm = c(sims.length / 1500);
+  const score = W.speed * speed + W.avg * avgSpeed + W.density * density + W.range * rng + W.acc * acc + W.leap * lp + W.size * size + W.hands * bothRatio + W.bias;
+  const label = score < T[0] ? 'Beginner' : score < T[1] ? 'Intermediate' : 'Advanced';
+  return { label, score, features: { nps, peak, range, maxSim, bothRatio, accFrac, avgLeap, notes: notes.length, speed, avgSpeed, density, rng, acc, lp, size } };
 }
+const W = { speed: 0.3, avg: 0.1, density: 0.12, range: 0.1, acc: 0.14, leap: 0.1, size: 0.08, hands: 0.06, bias: 0 };
+const T = [0.22, 0.5];
 
 // ---------------------------------------------------------------- helpers used by the engine
 /** Group notes into steps (same start time). Optionally only a given hand. */
@@ -300,4 +309,25 @@ export function simplifyNotes(notes, maxPerHand = 3, minDur = 0) {
 }
 
 export const beatsToSeconds = (beats, tempo) => (beats * 60) / tempo;
+
+/** Tempo clock for songs with tempo changes: song.tempoMap = [{beat, bpm}, ...] (falls back to the single song.tempo). */
+export function tempoClock(song) {
+  const raw = song.tempoMap?.length ? song.tempoMap : [{ beat: 0, bpm: song.tempo || 90 }];
+  const map = raw.map((s, i) => ({ beat: i === 0 ? 0 : s.beat, bpm: Math.max(20, Math.min(400, s.bpm)) }));
+  const segAt = (b) => { let lo = 0, hi = map.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (map[mid].beat <= b) lo = mid; else hi = mid - 1; } return lo; };
+  const clock = {
+    bpm: (b) => map[segAt(b)].bpm,
+    /** seconds from beat a to beat b at 100 % speed */
+    sec(a, b) {
+      if (b < a) return -clock.sec(b, a);
+      let t = 0, i = segAt(Math.max(a, 0)), cur = Math.max(a, 0);
+      if (a < 0) t += (Math.min(b, 0) - a) * 60 / map[0].bpm;
+      if (b <= 0) return t;
+      while (cur < b) { const end = i + 1 < map.length ? Math.min(map[i + 1].beat, b) : b; t += (end - cur) * 60 / map[i].bpm; cur = end; i++; if (i >= map.length) { if (cur < b) t += (b - cur) * 60 / map[map.length - 1].bpm; break; } }
+      return t;
+    },
+    changes: map.length > 1,
+  };
+  return clock;
+}
 export const fmtTime = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };

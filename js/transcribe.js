@@ -122,12 +122,12 @@ export function detectKey(notes) {
 }
 
 // ---------------------------------------------------------------- frames -> notes -> song
-export const DEFAULTS = { sens: 1, minDur: 0.1, grid: 0.25, ts: [4, 4], maxPerHand: 4, split: null, bpm: null, simplifyShort: true };
+export const DEFAULTS = { sens: 1, minDur: 0.1, grid: 0.25, ts: [4, 4], maxPerHand: 4, faithful: true, split: null, bpm: null, simplifyShort: true };
 
 export function framesToSong(analysis, options = {}, title = 'Imported song') {
   const o = { ...DEFAULTS, ...options };
   const { frames, hopSec } = analysis;
-  const thr = 3.2 / o.sens;
+  const thr = 2.7 / o.sens;
   const tempoInfo = estimateTempo(analysis);
   const bpm = o.bpm || tempoInfo.bpm;
   // ---- 1. track pitches across frames
@@ -149,10 +149,13 @@ export function framesToSong(analysis, options = {}, title = 'Imported song') {
     }
     for (const [m, a] of [...active]) if (!cur.has(m) && i - a.last > 2) { finish(m, a, a.last + 1); active.delete(m); }
   }
-  let notes = raw.filter((n) => n.t1 - n.t0 >= o.minDur);
+  let notes = raw.filter((n) => n.t1 - n.t0 >= Math.min(o.minDur, 0.08));
   // ---- 2. drop probable harmonics / ghosts: same-onset note an octave (or twelfth) above a much stronger one
   notes = notes.filter((a) => !notes.some((b) => b !== a && Math.abs(b.t0 - a.t0) < 0.06 && [12, 19, 24].includes(a.m - b.m) && b.s > a.s * 1.9));
   if (!notes.length) throw new Error('No notes were detected. Try raising the sensitivity, or use a cleaner (instrumental / piano) recording.');
+  const exactAll = notes;   // everything that survived cleaning, for faithful playback
+  notes = notes.filter((n) => n.t1 - n.t0 >= o.minDur);
+  if (!notes.length) notes = exactAll;
   // ---- 3. quantise to the beat grid
   const bps = bpm / 60, grid = o.grid;
   const bl = (o.ts[0] * 4) / o.ts[1];
@@ -168,6 +171,9 @@ export function framesToSong(analysis, options = {}, title = 'Imported song') {
   const minT = Math.min(...qn.map((n) => n.t));
   const shift = Math.floor(minT / bl + 1e-6) * bl;
   qn.forEach((n) => (n.t = +(n.t - shift).toFixed(4)));
+  // faithful notes: same beat axis, exact timing, quiet/short notes kept (this is what Watch plays)
+  const faithful = o.faithful ? exactAll.map((n) => ({ t: +(toBeat(n.t0) - shift).toFixed(4), d: Math.max(0.1, (n.t1 - n.t0) * bps), m: n.m, h: n.m >= 60 ? 'R' : 'L', v: n.s })).filter((n) => n.t > -1) : null;
+  if (faithful) { const mx = Math.max(...faithful.map((n) => n.v)) || 1; faithful.forEach((n) => { n.vel = 0.45 + 0.5 * Math.min(1, n.v / mx); }); }
   // merge duplicates (same pitch, same onset); shorten overlaps of same pitch
   qn.sort((a, b) => a.t - b.t || a.m - b.m);
   const out = [];
@@ -197,6 +203,7 @@ export function framesToSong(analysis, options = {}, title = 'Imported song') {
     key, tempo, ts: o.ts, notes: result, exact: false,
     desc: `Transcribed from audio at ~${tempo} BPM. Approximate – edit settings to improve it.`,
   });
+  if (faithful) song.audioNotes = faithful;
   song.analysisInfo = { bpm: tempoInfo.bpm, confidence: tempoInfo.confidence, notesRaw: raw.length, notes: result.length, split, maxSim: sim };
   return song;
 }

@@ -137,26 +137,31 @@ function renderLearn(el) {
 
 // ---------------------------------------------------------------- library
 const libState = { q: '', level: 'All', cat: 'All', comp: 'All' };
+const HIDDEN = new Set(['fur-elise', 'moonlight-1', 'alla-turca', 'prelude-c']);   // replaced by the full-length library versions
+const durLabel = (s) => (s.sec ? Math.max(1, Math.round(s.sec / 60)) + ' min' : '');
 function renderLibrary(el) {
-  const all = app.allSongs();
-  const comps = ['All', ...new Set(all.filter((s) => !s.custom).map((s) => composerShort(s.composer)))].sort((a, b) => (a === 'All' ? -1 : b === 'All' ? 1 : a.localeCompare(b)));
-  el.innerHTML = `<div class="head"><div><h1>Songs</h1><div class="sub">${all.length} pieces · ${all.filter((s) => s.level === 'Beginner').length} for beginners</div></div></div>
-    <div class="searchbox">${ico('search')}<input class="search" type="search" placeholder="Search title or composer" value="${esc(libState.q)}" autocomplete="off"></div>
-    <div class="chips" data-f="level">${['All', ...LEVELS].map((l) => `<button class="chip ${libState.level === l ? 'on' : ''}" data-v="${l}">${l}</button>`).join('')}</div>
-    <div class="chips" data-f="cat">${['All', 'Classical', 'Folk', 'Mine'].map((l) => `<button class="chip ${libState.cat === l ? 'on' : ''}" data-v="${l}">${l === 'Mine' ? 'My imports' : l}</button>`).join('')}<select class="sel" style="width:auto;height:34px;flex:none;border-radius:17px" data-f="comp">${comps.map((c) => `<option ${libState.comp === c ? 'selected' : ''}>${c === 'All' ? 'All composers' : c}</option>`).join('')}</select></div>
-    <div id="lib-list" style="margin-top:8px"></div>
-    <div class="note-box info small" style="margin-top:14px"><b>More songs:</b> import any MIDI file or audio on the Import tab, or drop MIDI files into <code>library/</code> in your repo (see README). Pieces marked “approx.” are simplified arrangements.</div>`;
+  const all = app.allSongs().filter((s) => !HIDDEN.has(s.id) || s.custom);
+  const counts = {}; all.filter((s) => !s.custom && s.cat !== 'folk').forEach((s) => { const c = composerShort(s.composer); counts[c] = (counts[c] || 0) + 1; });
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map((x) => x[0]);
+  const hasMine = all.some((s) => s.custom);
+  const cats = ['All', ...top, 'Folk', ...(hasMine ? ['Mine'] : [])];
+  if (!cats.includes(libState.cat)) libState.cat = 'All';
+  el.innerHTML = `<div class="head"><div><h1>Songs</h1><div class="sub">${all.length} pieces</div></div></div>
+    <div class="searchbox">${ico('search')}<input class="search" type="search" placeholder="Search songs or composers" value="${esc(libState.q)}" autocomplete="off"></div>
+    <div class="chips" data-f="cat">${cats.map((l) => `<button class="chip ${libState.cat === l ? 'on' : ''}" data-v="${esc(l)}">${l === 'Mine' ? 'My imports' : l}</button>`).join('')}</div>
+    <div class="chips" data-f="level">${['All', ...LEVELS].map((l) => `<button class="chip ${libState.level === l ? 'on' : ''}" data-v="${l}">${l === 'All' ? 'Any level' : l}</button>`).join('')}</div>
+    <div id="lib-list" style="margin-top:8px"></div>`;
   const list = $('#lib-list', el);
   const draw = () => {
     const q = libState.q.trim().toLowerCase();
-    const catOk = (s) => libState.cat === 'All' || (libState.cat === 'Mine' ? !!s.custom : libState.cat === 'Folk' ? (s.cat === 'folk' && !s.custom) : (!s.custom && s.cat !== 'folk'));
+    const catOk = (s) => libState.cat === 'All' || (libState.cat === 'Mine' ? !!s.custom : libState.cat === 'Folk' ? (s.cat === 'folk' && !s.custom) : (!s.custom && composerShort(s.composer) === libState.cat));
     const rows = all.filter((s) => (libState.level === 'All' || s.level === libState.level) && catOk(s)
-      && (libState.comp === 'All' || composerShort(s.composer) === libState.comp)
       && (!q || (s.title + ' ' + s.composer + ' ' + (s.desc || '')).toLowerCase().includes(q)));
     const order = { Beginner: 0, Intermediate: 1, Advanced: 2, Custom: 1 };
-    rows.sort((a, b) => (b.custom ? 1 : 0) - (a.custom ? 1 : 0) || (order[a.level] ?? 1) - (order[b.level] ?? 1) || a.title.localeCompare(b.title));
+    const feat = (s) => (/Turkish|Fantaisie|Minute|Clair|Elise|Moonlight/.test(s.title) ? 0 : 1);
+    rows.sort((a, b) => (b.custom ? 1 : 0) - (a.custom ? 1 : 0) || (libState.cat === 'All' && libState.level === 'All' && !q ? feat(a) - feat(b) : 0) || (order[a.level] ?? 1) - (order[b.level] ?? 1) || a.title.localeCompare(b.title));
     list.innerHTML = rows.map((s) => { const p = store.data.progress.songs[s.id]; return `<div class="item" data-id="${esc(s.id)}" role="button" tabindex="0"><div class="ico ${s.level === 'Advanced' ? 'purple' : s.level === 'Intermediate' ? 'warm' : ''}">${ico('music')}</div>
-      <div class="grow"><h3>${esc(s.title)}</h3><p>${esc(s.composer)}${s.era && !s.custom ? ' · ' + esc(s.era) : ''}</p><div style="margin-top:5px">${levelBadge(s.level)} ${s.exact === false ? '<span class="badge approx">approx.</span>' : ''}</div></div>
+      <div class="grow"><h3>${esc(s.title)}</h3><p>${esc(composerShort(s.composer))} · ${esc(s.level)}${durLabel(s) ? ' · ' + durLabel(s) : ''}${s.exact === false ? ' · simplified' : ''}</p></div>
       <div style="text-align:right">${p ? starsHtml(p.stars) : ''}${s.custom ? `<div><button class="small faint" data-del="${esc(s.id)}" aria-label="Delete">${ico('trash')}</button></div>` : ''}</div></div>`; }).join('') || '<div class="empty">No songs match.</div>';
   };
   draw();
@@ -166,7 +171,6 @@ function renderLibrary(el) {
     const del = e.target.closest('[data-del]'); if (del) { e.stopPropagation(); if (confirm('Delete this imported song?')) { store.removeCustom(del.dataset.del); route(); } return; }
     const it = e.target.closest('.item[data-id]'); if (it) { const s = app.findSong(it.dataset.id); if (s) app.play(s, { mode: 'learn' }); }
   });
-  $('select[data-f=comp]', el).addEventListener('change', (e) => { libState.comp = e.target.value.startsWith('All') ? 'All' : e.target.value; draw(); });
 }
 
 // ---------------------------------------------------------------- progress
@@ -224,7 +228,7 @@ function renderSettings(el) {
     <div class="card"><div class="row wrapx"><button class="btn sm ghost" id="exp">Export backup</button><label class="btn sm ghost" style="cursor:pointer">Import backup<input type="file" id="imp" accept=".json,application/json" hidden></label><button class="btn sm ghost" id="rst" style="color:#ff8497">Reset progress</button></div>
       <p class="small faint" style="margin:10px 0 0">Progress and imported songs are stored on this device only.</p></div>
     <div class="section"><h2>About &amp; limits</h2></div>
-    <div class="card small muted" style="line-height:1.6"><b style="color:#fff">PianoPlay</b> works fully offline with no accounts or paid services.<br>• Microphone note detection is most reliable between C3 and C7 and for one or two notes at a time. Dense chords and noisy rooms are harder.<br>• Audio → sheet-music transcription is approximate: best on solo piano or clean instrumentals, weaker on full mixes, fast runs and big chords. Always check the result.<br>• YouTube audio can’t be read by a web app, so YouTube links are for reference only – import the audio file or MIDI instead.<br>• Library pieces are simplified teaching arrangements; ones marked “approx.” may differ from the published score.</div>`;
+    <div class="card small muted" style="line-height:1.6"><b style="color:#fff">PianoPlay</b> works fully offline with no accounts or paid services.<br>• Microphone note detection is most reliable between C3 and C7 and for one or two notes at a time. Dense chords and noisy rooms are harder.<br>• Audio → sheet-music transcription is approximate: best on solo piano or clean instrumentals, weaker on full mixes, fast runs and big chords. Always check the result.<br>• YouTube audio can’t be read by a web app, so YouTube links are for reference only – import the audio file or MIDI instead.<br>• Most library pieces are full-length scores from the Mutopia Project (public domain or Creative Commons; licence per piece at mutopiaproject.org). Pieces marked “simplified” are teaching arrangements.<br>• Piano sound: Salamander Grand Piano by Alexander Holm (CC BY 3.0).</div>`;
   wireActions(el);
   el.addEventListener('click', async (e) => {
     const sw1 = e.target.closest('[data-sw]'); if (sw1) { const k = sw1.dataset.sw; store.set('settings.' + k, !store.settings[k]); sw1.classList.toggle('on'); return; }

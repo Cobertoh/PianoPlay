@@ -1,5 +1,5 @@
 // PianoPlay - Web MIDI input (keyboards) and Standard MIDI File import/export.
-import { estimateDifficulty, barLength } from './music.js';
+import { estimateDifficulty, barLength, tempoClock } from './music.js';
 
 // ---------------------------------------------------------------- Web MIDI input
 export class MidiInput {
@@ -81,24 +81,32 @@ export function parseMidiFile(buffer) {
 /** MIDI file -> PianoPlay song definition (notes in beats; hands split by track or pitch). */
 export function midiToSong(buffer, title = 'Imported MIDI') {
   const mf = parseMidiFile(buffer);
-  const uspq = mf.tempos[0]?.uspq || 500000;
-  const tempo = Math.round(60000000 / uspq);
   const tracks = mf.tracks.filter((t) => t.notes.length);
   if (!tracks.length) throw new Error('This MIDI file has no notes');
-  const all = tracks.flatMap((t, ti) => t.notes.map((n) => ({ ...n, track: ti })));
+  // tempo map (ticks -> beats of one quarter note), merging near-identical consecutive tempi
+  const tempoMap = [];
+  for (const t of (mf.tempos.length ? mf.tempos : [{ tick: 0, uspq: 500000 }])) {
+    const bpm = 60000000 / t.uspq, beat = t.tick / mf.ppq, prev = tempoMap[tempoMap.length - 1];
+    if (prev && Math.abs(prev.bpm - bpm) / prev.bpm < 0.01) continue;
+    if (prev && Math.abs(prev.beat - beat) < 1e-6) { prev.bpm = bpm; continue; }
+    tempoMap.push({ beat, bpm });
+  }
+  if (!tempoMap.length || tempoMap[0].beat > 0) tempoMap.unshift({ beat: 0, bpm: tempoMap[0]?.bpm || 120 });
+  const tempo = Math.round(tempoMap[0].bpm);
   const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
-  let split = 60;
+  const allMed = med(tracks.flatMap((t) => t.notes.map((n) => n.m)));
   const trackMed = tracks.map((t) => med(t.notes.map((n) => n.m)));
-  const useTracks = tracks.length >= 2 && tracks.length <= 4 && Math.max(...trackMed) - Math.min(...trackMed) > 10;
-  const notes = all.map((n) => {
-    let h;
-    if (useTracks) h = trackMed[n.track] >= (Math.max(...trackMed) + Math.min(...trackMed)) / 2 ? 'R' : 'L';
-    else h = n.m >= split ? 'R' : 'L';
-    return { t: n.tick / mf.ppq, d: Math.max(n.dur / mf.ppq, 0.125), m: n.m, h };
+  const useTracks = tracks.length >= 2 && Math.max(...trackMed) - Math.min(...trackMed) > 10;
+  // de-duplicate identical notes, then assign hands
+  const seen = new Set(); const raw = [];
+  tracks.forEach((t, ti) => t.notes.forEach((n) => { const k = n.tick + ':' + n.m; if (seen.has(k)) return; seen.add(k); raw.push({ ...n, track: ti }); }));
+  const notes = raw.map((n) => {
+    const h = useTracks ? (trackMed[n.track] >= allMed ? 'R' : 'L') : (n.m >= 60 ? 'R' : 'L');
+    return { t: n.tick / mf.ppq, d: Math.max(n.dur / mf.ppq, 0.125), m: n.m, h, v: n.v };
   }).sort((a, b) => a.t - b.t || a.m - b.m);
   const len = Math.max(...notes.map((n) => n.t + n.d));
   notes.forEach((n, i) => (n.id = i));
-  const song = { id: 'midi-' + Date.now(), title, composer: 'Imported MIDI', tempo: Math.min(Math.max(tempo, 30), 240), ts: mf.ts, key: mf.key, notes, length: len, bars: Math.ceil(len / barLength(mf.ts)), custom: true, source: 'midi', warnings: [] };
+  const song = { id: 'midi-' + Date.now(), title, composer: 'Imported MIDI', tempo: Math.min(Math.max(tempo, 20), 300), tempoMap: tempoMap.length > 1 ? tempoMap : undefined, ts: mf.ts, key: mf.key, notes, length: len, bars: Math.ceil(len / barLength(mf.ts)), custom: true, source: 'midi', warnings: [] };
   song.est = estimateDifficulty(song);
   song.level = song.est.label;
   return song;

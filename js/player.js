@@ -3,7 +3,7 @@ import { Stage } from './stage.js';
 import { SheetView } from './sheet.js';
 import { Session } from './session.js';
 import { levelBadge, ico, esc, $, $$, toast } from './ui.js';
-import { fmtTime, beatsToSeconds } from './music.js';
+import { fmtTime, tempoClock } from './music.js';
 import { MidiInput } from './midi.js';
 
 export class Player {
@@ -77,7 +77,7 @@ export class Player {
     const chip = this.q('[data-r=loopchip]');
     if (this.session.loop) { const bl = this.session.bl; chip.style.display = ''; chip.innerHTML = `${ico('loop')} bars ${Math.round(this.session.loop.a / bl) + 1}–${Math.round(this.session.loop.b / bl)} <span style="margin-left:4px;opacity:.7">✕</span>`; }
     else chip.style.display = 'none';
-    const dur = beatsToSeconds(this.song.length, this.song.tempo * this.session.speed);
+    const dur = tempoClock(this.song).sec(0, this.song.length) / this.session.speed;
     this.q('[data-r=time]').textContent = `${this.song.bars} bars · ♩=${Math.round(this.song.tempo * this.session.speed)} · ${fmtTime(dur)}`;
   }
   showHint() {
