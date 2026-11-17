@@ -1,0 +1,12 @@
+{
+  "name": "pianoplay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PianoPlay - a beautiful, installable piano learning web app. Static site, no build step.",
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "dev": "npx --yes serve -l 5173 ."
+  }
+}
